@@ -142,10 +142,6 @@ class RunContext:
         self.work_dir = self.project_dir / ".video_agent"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        # 本次工具调用可用的 ZCode 官方身份（由 server_common 从 tools/call 的 _meta 取出，
-        # 每次调用重新赋值）。None 表示宿主没下发——CLI 直调与非 ZCode 宿主都是这种情况。
-        # 类型为 ve_tools.official_auth.OfficialAuth | None，此处不 import 以免循环依赖。
-        self.official_auth = None
         self.active_video_path: Path | None = None
         self.active_video_key: str | None = None
         self.active_video_visually_ingested: bool = False

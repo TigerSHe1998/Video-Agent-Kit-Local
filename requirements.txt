@@ -1,6 +1,5 @@
 # server_common.py uses the 1.x Server.list_tools/call_tool decorator API.
 mcp>=1.0.0,<2.0.0
-requests>=2.31.0
 pillow>=10.0.0
 # headless build: the plugin only encodes/decodes frames, and mixing
 # opencv-python with opencv-python-headless corrupts the shared cv2 package.

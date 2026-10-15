@@ -1,5 +1,5 @@
 ---
-description: 体检本机环境并装齐缺失依赖 — python 包/ffmpeg(含编码器与 libass 滤镜)/中文字体真覆盖/cloud ASR 凭据/语音服务连通性, 逐项报"要什么、缺了挂哪个能力、本平台怎么装(默认国内镜像)" (支持 macOS/Windows/Linux)
+description: 体检本机环境并装齐缺失依赖 — python 包/ffmpeg(含编码器与 libass 滤镜)/中文字体真覆盖/本地转录 CLI (transcribe), 逐项报"要什么、缺了挂哪个能力、本平台怎么装(默认国内镜像)" (支持 macOS/Windows/Linux)
 argument-hint: "[--fix]"
 skills: env-setup
 ---

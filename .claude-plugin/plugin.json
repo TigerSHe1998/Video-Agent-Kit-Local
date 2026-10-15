@@ -1,10 +1,10 @@
 {
-  "name": "video-agent-kit",
-  "version": "0.4.3",
-  "description": "自动化视频剪辑工具包: 标准云端语音转录、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和字幕。",
+  "name": "video-agent-kit-local",
+  "version": "0.1.0",
+  "description": "自动化视频剪辑工具包（本地化）: 本地语音转录、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和字幕。",
   "author": {
-    "name": "Z.ai",
-    "url": "https://z.ai"
+    "name": "TigerSHe1998",
+    "url": "https://github.com/TigerSHe1998"
   },
   "license": "MIT",
   "keywords": [
@@ -12,21 +12,10 @@
     "video-agent",
     "visual-inspection",
     "timeline",
-    "ffmpeg"
+    "ffmpeg",
+    "local-asr"
   ],
   "userConfig": {
-    "speech_mcp_url": {
-      "title": "Speech MCP URL",
-      "description": "Optional remote HTTP MCP server URL for paid speech transcription.",
-      "type": "string",
-      "default": ""
-    },
-    "speech_mcp_token": {
-      "title": "Speech MCP token",
-      "description": "Optional bearer token for the remote speech MCP server.",
-      "type": "string",
-      "default": ""
-    },
     "max_inline_images": {
       "title": "Max inline images",
       "description": "Maximum images inlined in one MCP tool result before remaining paths are listed for Read.",
@@ -35,8 +24,8 @@
     }
   },
   "description_i18n": {
-    "en": "Automated video editing toolkit: standard cloud speech transcription, full video frame extraction and understanding, local re-inspection, timeline, preview rendering, QC, and subtitles.",
-    "zh-CN": "自动化视频剪辑工具包: 标准云端语音转录、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和字幕。"
+    "en": "Automated video editing toolkit (local): local speech transcription via Moss Transcribe WebUI, full video frame extraction and understanding, local re-inspection, timeline, preview rendering, QC, and subtitles.",
+    "zh-CN": "自动化视频剪辑工具包（本地化）: 本地语音转录、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和字幕。"
   },
   "mcpServers": {
     "video-edit": {
@@ -48,8 +37,6 @@
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "env": {
         "VE_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}",
-        "VE_SPEECH_MCP_URL": "${user_config.speech_mcp_url}",
-        "VE_SPEECH_MCP_TOKEN": "${user_config.speech_mcp_token}",
         "VE_MAX_INLINE_IMAGES": "${user_config.max_inline_images}"
       },
       "timeoutMs": 900000

@@ -13,7 +13,6 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from ve_tools.official_auth import OfficialAuth, read_official_auth
 from ve_tools.result import ToolResult
 from ve_tools.run_context import RunContext, clean_env
 
@@ -132,7 +131,7 @@ def serve(server_name: str, schemas: dict[str, dict], impls: dict[str, Callable]
             for name, schema in schemas.items()
         ]
 
-    async def call_tool(name: str, arguments: dict, official_auth: OfficialAuth | None = None):
+    async def call_tool(name: str, arguments: dict):
         fn = impls.get(name)
         if fn is None:
             return [types.TextContent(type="text", text=f"[ERROR] Unknown tool: {name}")]
@@ -144,10 +143,6 @@ def serve(server_name: str, schemas: dict[str, dict], impls: dict[str, Callable]
             return [types.TextContent(type="text", text="[ERROR] tool arguments must be a JSON object")]
 
         def _run():
-            # 在 worker 线程里赋值而不是提交前：事件循环可能在上一次工具体还在跑时就受理下一次
-            # tools/call，提交前赋值会覆盖在飞调用的身份。executor 是单 worker，因此工具体之间
-            # 严格串行，这里的赋值与其后的整个工具体属同一次调用。
-            ctx.official_auth = official_auth
             try:
                 return result_to_content(fn(tool_args, ctx))
             except Exception as exc:
@@ -161,13 +156,8 @@ def serve(server_name: str, schemas: dict[str, dict], impls: dict[str, Callable]
     # constructor callbacks. Keep the older decorator path for pinned installs.
     server = Server(server_name)
     if hasattr(server, "list_tools") and hasattr(server, "call_tool"):
-        # 身份头必须在事件循环线程里读：request_context 是 contextvar，
-        # 不跨 run_in_executor 的线程边界（见 ve_tools/official_auth.py）。
-        async def call_tool_entry(name: str, arguments: dict):
-            return await call_tool(name, arguments, read_official_auth(server=server))
-
         server.list_tools()(list_tools)
-        server.call_tool()(call_tool_entry)
+        server.call_tool()(call_tool)
     else:
         async def on_list_tools(_request_context, _params):
             return types.ListToolsResult(tools=await list_tools())
@@ -178,8 +168,7 @@ def serve(server_name: str, schemas: dict[str, dict], impls: dict[str, Callable]
                 params.get("arguments") if isinstance(params, dict)
                 else getattr(params, "arguments", None)
             )
-            official_auth = read_official_auth(request_context=request_context, params=params)
-            return types.CallToolResult(content=await call_tool(name, arguments, official_auth))
+            return types.CallToolResult(content=await call_tool(name, arguments))
 
         server = Server(
             server_name,

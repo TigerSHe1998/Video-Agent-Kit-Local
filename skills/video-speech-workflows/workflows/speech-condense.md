@@ -58,9 +58,9 @@ Everything under `out/` relative to the project directory. Conversation text is 
 
 `inspect_media(input_path)` — duration, resolution, orientation, audio streams.
 
-`speech_transcribe(input_path)` — use cloud ASR and check what you got. Word-level timestamps are not a nicety here: they decide whether cut points can land between words, whether filler excision is safe at all, and whether `condense_plan` can prove a boundary is not mid-syllable. If cloud ASR is unavailable, continue only after recording the limitation.
+`speech_transcribe(input_path)` — the local ASR runs the transcription; check what you got. Word-level timestamps are not a nicety here: they decide whether cut points can land between words, whether filler excision is safe at all, and whether `condense_plan` can prove a boundary is not mid-syllable. If the local ASR is unavailable, continue only after recording the limitation.
 
-**Do not pass a `language` you inferred from the filename.** The cloud ASR compatibility backend only runs speaker diarization when `language` is empty, `zh`, or `auto`; other values may switch it off, and you can get a transcript with **no speaker labels at all** plus coarser, unpunctuated segments where one 20-second block bundles two people. This has already cost a run: an English filename on a Chinese basketball press conference led to `language="en"`, and both models then reconstructed every speaker from scratch against unlabelled blocks. Leave the default (`zh`) or pass `auto` unless you have *heard* the audio is another language. After speech_transcribe, inspect the transcript metadata (`provider`, `language`, `speaker_labels`, `segments[].speaker`) before doing anything else; if Chinese speech came back under a non-zh language or without speaker labels on a multi-speaker piece, re-run `speech_transcribe` with `language="zh"` or omit the language.
+**Do not guess a language.** The local model detects language itself; the `language` argument is recorded but does not affect recognition. Speaker diarization runs whenever `diarize=true` (the default). After speech_transcribe, inspect the transcript metadata (`provider`, `language`, `speaker_labels`, `segments[].speaker`) before doing anything else; if a multi-speaker piece came back without speaker labels, re-run `speech_transcribe` and make sure `diarize` was not disabled.
 
 Then sanity-check, because everything downstream is built on this text:
 
@@ -70,7 +70,7 @@ Then sanity-check, because everything downstream is built on this text:
 
 ### Phase 1b: Check speaker attribution (multi-speaker only)
 
-If the piece has more than one speaker, the ASR's speaker labels are the least reliable thing it returns. Cloud ASR transcribes the **words** accurately but built-in diarization can collapse on remote-mixed or noisy audio — a verified case tagged an interviewer's questions and the guest's answers all as one speaker. So before trusting any `speaker` field, run `diarize_audit(transcript_path)`.
+If the piece has more than one speaker, the ASR's speaker labels are the least reliable thing it returns. The local model transcribes the **words** accurately but its diarization can collapse on remote-mixed or noisy audio — a verified case tagged an interviewer's questions and the guest's answers all as one speaker. So before trusting any `speaker` field, run `diarize_audit(transcript_path)`.
 
 `diarize_audit` does **not** decide anything — it hands you an evidence brief and leaves the call to you:
 
@@ -263,7 +263,7 @@ Also carry over what the survey told you about cut-time behaviour: burned-in sou
 ## Tool Policy
 
 - `inspect_media` — required for the source.
-- `speech_transcribe` — required. Use cloud ASR and verify word-level timestamps are present when the edit depends on word-safe cuts.
+- `speech_transcribe` — required. Note: the local ASR provides **segment-level** timestamps only (word-level is a Moss model limitation), so word-safe cuts are not provable — plan cuts on segment boundaries and verify joins by listening/rewatch instead.
 - `condense_index` — required, and it *is* the visual pass. Its unit table, pause-detection verdict, thumbnail sheet and motion baseline are all a required read.
 - `subtitle_scout` — not for this pipeline. It is subtitle-shaped: half its output is a caption-band strip condensing has no use for.
 - `video_ingest` — rarely. Only when you must see content between the survey samples. Keep it to one ingest per relevant file and avoid repeated dense sweeps.

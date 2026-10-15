@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 
 
 TOOL_SCHEMAS: dict[str, dict] = {
@@ -35,7 +34,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "transcribe": {
-        "description": "Compatibility alias for speech_transcribe. Create transcript.json for a video/audio file through the configured cloud ASR capability. Transient network/concurrency/rate-limit/server errors retry by default (retries=3 extra attempts, retry_backoff_seconds=30), but deterministic configuration/input failures do not retry. Long media over about 30 minutes is automatically split into overlapping chunks of at most chunk_seconds (default 1700s), transcribed with per-chunk caching, then merged back onto the source timeline. Millisecond timestamps are normalized to seconds. A silent-audio result (no speech) is a valid empty transcript, flagged silent_audio=true. In one MCP session, transcribing an input media file remembers that transcript for the same media fingerprint without marking any video as visually ingested; it updates the active transcript only when the input media fingerprint matches the current active video. Downstream transcript readers support plain text, JSON, and standard JSONL, and range filtering ignores NaN/Infinity timestamps.",
+        "description": "Compatibility alias for speech_transcribe. Create transcript.json for a video/audio file through the local transcribe CLI (Moss Transcribe WebUI backend; the CLI attaches to a running service or starts one automatically). Timestamps are segment-level with speaker diarization from the local model; word-level timing is NOT provided by the Moss models (words stay empty; downstream consumers fall back to segment timing). Service-side autosplitting (default 30 minutes, VE_TRANSCRIBE_AUTOSPLIT) keeps timestamps on the full-media timeline; speaker labels are per-split clusters (p{part}_{speaker}) when split. Transient service failures retry by default (retries=1 extra attempt, retry_backoff_seconds=10), but input/usage errors do not. Millisecond timestamps are normalized to seconds. A silent-audio result (no speech) is a valid empty transcript, flagged silent_audio=true. In one MCP session, transcribing an input media file remembers that transcript for the same media fingerprint without marking any video as visually ingested; it updates the active transcript only when the input media fingerprint matches the current active video. Downstream transcript readers support plain text, JSON, and standard JSONL, and range filtering ignores NaN/Infinity timestamps.",
         "inputSchema": {
             "type": "object",
             "required": ["input_path"],
@@ -44,23 +43,36 @@ TOOL_SCHEMAS: dict[str, dict] = {
                 "output_json": {"type": "string"},
                 "provider": {
                     "type": "string",
-                    "enum": ["auto", "cloud", "cloud_asr"],
+                    "enum": ["auto", "local_asr", "local"],
                     "default": "auto",
-                    "description": "ASR provider. Use auto unless a workflow explicitly requires cloud_asr."
+                    "description": "ASR provider. Use auto; the local backend is the only implementation."
                 },
-                "language": {"type": "string", "default": "zh"},
-                "chunk_seconds": {
-                    "type": "number",
-                    "exclusiveMinimum": 0,
-                    "description": "Maximum seconds per chunk for long media before merge (default 1700)."
+                "language": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Recorded in the transcript payload only; the local model detects language itself."
+                },
+                "diarize": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Enable speaker diarization (local model clustering)."
+                },
+                "autosplit_min": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 180,
+                    "description": "Auto-split long audio into N-minute chunks (0 = off, default 30 / VE_TRANSCRIBE_AUTOSPLIT)."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "Inference device name for the local service (see `transcribe --list-backend`; default VE_TRANSCRIBE_BACKEND)."
                 },
                 "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
-                "poll_interval_seconds": {"type": "number", "exclusiveMinimum": 0},
                 "retries": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 10,
-                    "description": "Extra retry attempts for transient ASR failures such as concurrency/rate-limit/network/server errors."
+                    "description": "Extra retry attempts for transient service failures."
                 },
                 "retry_count": {
                     "type": "integer",
@@ -71,7 +83,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
                 "retry_backoff_seconds": {
                     "type": "number",
                     "minimum": 0,
-                    "description": "Initial exponential backoff before ASR retries (default 30)."
+                    "description": "Initial exponential backoff before ASR retries (default 10)."
                 },
                 "work_dir": {"type": "string"}
             },
@@ -79,7 +91,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "video_ingest": {
-        "description": "Sample the complete video into timestamped contact-sheet images and return them as MCP image content for the Claude Code main model to inspect directly. Standard flow: run transcribe first and pass its output as transcript_path, so every contact sheet is paired with matching speech text; omit transcript arguments only when transcribe reported that cloud ASR is unavailable (a transcript-less ingest while ASR is available gets a reminder in the result). Call this once before planning any video edit, and call it again if the video file at that path is overwritten or replaced. Explicit transcript_path must exist. In an MCP session, re-ingesting a video without transcript arguments reuses the transcript previously remembered for that same video fingerprint when available. Full-ingest session state is recorded only after the observation package is successfully produced; failed sampling does not count as full-video visual evidence. The tool is idempotent for the same video/prompt/transcript/settings, preserves every sampled visual observation without blank/near-duplicate folding, and always includes the matching transcript when provided. If the result lists non-inlined image paths, read them before making visual decisions. This tool does not call any model API.",
+        "description": "Sample the complete video into timestamped contact-sheet images and return them as MCP image content for the Claude Code main model to inspect directly. Standard flow: run transcribe first and pass its output as transcript_path, so every contact sheet is paired with matching speech text; omit transcript arguments only when transcribe reported that the local ASR is unavailable (a transcript-less ingest while ASR is available gets a reminder in the result). Call this once before planning any video edit, and call it again if the video file at that path is overwritten or replaced. Explicit transcript_path must exist. In an MCP session, re-ingesting a video without transcript arguments reuses the transcript previously remembered for that same video fingerprint when available. Full-ingest session state is recorded only after the observation package is successfully produced; failed sampling does not count as full-video visual evidence. The tool is idempotent for the same video/prompt/transcript/settings, preserves every sampled visual observation without blank/near-duplicate folding, and always includes the matching transcript when provided. If the result lists non-inlined image paths, read them before making visual decisions. This tool does not call any model API.",
         "inputSchema": {
             "type": "object",
             "required": ["video_path"],
@@ -511,14 +523,18 @@ TOOL_SCHEMAS.update(RECAP_TOOL_SCHEMAS)
 
 SPEECH_TRANSCRIBE_SCHEMA = {
     "description": (
-        "Create a timestamped transcript for a video/audio file through the standard speech_transcribe "
-        "tool. provider=auto uses the configured cloud ASR capability: an explicit remote HTTP MCP "
-        "first, the host-authenticated ZCode official channel next, then the local compatibility "
-        "backend. Transient "
-        "network/concurrency/rate-limit/server errors retry by default; deterministic input and "
-        "configuration failures do not. Long media may be split into cached overlapping chunks and "
-        "merged back onto the source timeline. Silent audio returns a valid empty transcript flagged "
-        "silent_audio=true."
+        "Create a timestamped transcript for a video/audio file through the local transcribe CLI "
+        "(Moss Transcribe WebUI backend). The CLI attaches to a running WebUI service on "
+        "VE_TRANSCRIBE_HOST:VE_TRANSCRIBE_PORT (default 127.0.0.1:8390) or starts one automatically. "
+        "Timestamps are segment-level with speaker diarization from the local model; word-level timing "
+        "is NOT provided by the Moss models (words stay empty; downstream falls back to segment "
+        "timing). The model detects "
+        "language itself (the language argument is recorded only). Long media is auto-split "
+        "server-side (default 30 minutes, VE_TRANSCRIBE_AUTOSPLIT; 0 disables) with timestamps "
+        "corrected to the full-media timeline; when split, speaker labels are per-split clusters "
+        "(p{part}_{speaker}) — the same person may carry different labels across parts. Transient "
+        "service failures retry by default; input/usage errors do not. Silent audio returns a valid "
+        "empty transcript flagged silent_audio=true."
     ),
     "inputSchema": {
         "type": "object",
@@ -528,29 +544,42 @@ SPEECH_TRANSCRIBE_SCHEMA = {
             "output_json": {"type": "string"},
             "provider": {
                 "type": "string",
-                "enum": ["auto", "cloud", "cloud_asr"],
+                "enum": ["auto", "local_asr", "local"],
                 "default": "auto",
-                "description": "ASR provider. Use auto unless a workflow explicitly requires cloud_asr.",
+                "description": "ASR provider. Use auto; the local backend is the only implementation.",
             },
-            "language": {"type": "string", "default": "zh"},
-            "chunk_seconds": {
-                "type": "number",
-                "exclusiveMinimum": 0,
-                "description": "Maximum seconds per chunk for long media before merge.",
+            "language": {
+                "type": "string",
+                "default": "",
+                "description": "Recorded in the transcript payload only; the local model detects language itself.",
+            },
+            "diarize": {
+                "type": "boolean",
+                "default": True,
+                "description": "Enable speaker diarization (local model clustering).",
+            },
+            "autosplit_min": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 180,
+                "description": "Auto-split long audio into N-minute chunks (0 = off, default 30 / VE_TRANSCRIBE_AUTOSPLIT).",
+            },
+            "backend": {
+                "type": "string",
+                "description": "Inference device name for the local service (see `transcribe --list-backend`; default VE_TRANSCRIBE_BACKEND).",
             },
             "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
-            "poll_interval_seconds": {"type": "number", "exclusiveMinimum": 0},
             "retries": {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 10,
-                "description": "Extra retry attempts for transient ASR failures.",
+                "description": "Extra retry attempts for transient service failures.",
             },
             "retry_count": {"type": "integer", "minimum": 0, "maximum": 10},
             "retry_backoff_seconds": {
                 "type": "number",
                 "minimum": 0,
-                "description": "Initial exponential backoff before ASR retries.",
+                "description": "Initial exponential backoff before ASR retries (default 10).",
             },
             "work_dir": {"type": "string"},
         },
@@ -560,35 +589,6 @@ SPEECH_TRANSCRIBE_SCHEMA = {
 
 
 
-def _scrub_public_schema_text(value):
-    """Last line of defence over the published tool schemas.
-
-    The schema literals above are already vendor-neutral; this pass exists so a
-    future edit cannot reintroduce a vendor name into a tool description that
-    every client displays. Same intent as speech_service._VENDOR_PATTERNS — the
-    vendor strings here are the things being removed, not things being shipped.
-    """
-    if isinstance(value, dict):
-        return {key: _scrub_public_schema_text(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_scrub_public_schema_text(item) for item in value]
-    if not isinstance(value, str):
-        return value
-    replacements = [
-        (r"seed[_ -]?asr", "cloud_asr"),
-        (r"Seed ASR", "cloud ASR"),
-        (r"Volcengine|volcengine|火山引擎|火山|豆包|ByteDance|bytedance", "cloud speech service"),
-        (r"VE_SEED_[A-Z0-9_]+", "compatible legacy speech credential"),
-        (r"volc\.[A-Za-z0-9_.-]+", "cloud_resource"),
-        (r"openspeech\.bytedance\.com", "cloud speech endpoint"),
-    ]
-    out = value
-    for pattern, replacement in replacements:
-        out = re.sub(pattern, replacement, out, flags=re.IGNORECASE)
-    return out
-
-
-TOOL_SCHEMAS = _scrub_public_schema_text(TOOL_SCHEMAS)
 TOOL_SCHEMAS["speech_transcribe"] = SPEECH_TRANSCRIBE_SCHEMA
 TOOL_SCHEMAS["transcribe"] = {
     **SPEECH_TRANSCRIBE_SCHEMA,

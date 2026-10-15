@@ -1,6 +1,6 @@
 ---
 name: env-setup
-description: Checking and provisioning the machine's environment for the video-agent-kit plugin — probing for ffmpeg/ffprobe that actually carry the encoders and filters we render with (libx264/aac/libmp3lame, libass, libfreetype), python packages (mcp, cv2, numpy, PIL, jieba, fontTools, scenedetect) in the interpreter Claude Code really uses, a CJK font whose cmap truly covers Chinese, and which speech channel is in play (under ZCode the official channel needs no local key) — then installing what is missing (China mirrors by default) or telling the user exactly what to install. Works on macOS, Windows and Linux. Use BEFORE the first edit run on a new machine, or whenever a tool fails in an environment-shaped way — ModuleNotFoundError, `ffmpeg not found`, `Unknown encoder 'libx264'`, `No such filter: 'subtitles'`, `no font file found for family`, 字幕烧成豆腐块/方块, speech_transcribe 超时或 401. Also use when asked to 检查环境 / 装依赖 / 配国内源 / setup / doctor.
+description: Checking and provisioning the machine's environment for the video-agent-kit-local plugin — probing for ffmpeg/ffprobe that actually carry the encoders and filters we render with (libx264/aac/libmp3lame, libass, libfreetype), python packages (mcp, cv2, numpy, PIL, jieba, fontTools, scenedetect) in the interpreter Claude Code really uses, a CJK font whose cmap truly covers Chinese, and the local transcribe CLI (Moss Transcribe WebUI) being resolvable — then installing what is missing (China mirrors by default) or telling the user exactly what to install. Works on macOS, Windows and Linux. Use BEFORE the first edit run on a new machine, or whenever a tool fails in an environment-shaped way — ModuleNotFoundError, `ffmpeg not found`, `Unknown encoder 'libx264'`, `No such filter: 'subtitles'`, `no font file found for family`, 字幕烧成豆腐块/方块, speech_transcribe 超时或报服务错误. Also use when asked to 检查环境 / 装依赖 / 配国内源 / setup / doctor.
 ---
 
 # Env Setup
@@ -33,34 +33,28 @@ for **the current OS**. This table is only for judging *impact*:
 
 | Requirement | Dead without it |
 |---|---|
-| Python ≥ 3.10, and `mcp` (1.x), `requests`, `opencv-python-headless`, `numpy`, `pillow`, `jieba`, `fonttools`, `scenedetect` in **that same interpreter** | `mcp` → every tool (server won't start); requests → `transcribe`; cv2/numpy/PIL → `video_ingest`, contact sheets, `qc_preview` scans, i.e. all visual evidence; jieba → `subtitle_build` line breaking; fontTools → the pre-render tofu check; scenedetect → `detect_shots` shot boundaries |
+| Python ≥ 3.10, and `mcp` (1.x), `opencv-python-headless`, `numpy`, `pillow`, `jieba`, `fonttools`, `scenedetect` in **that same interpreter** | `mcp` → every tool (server won't start); cv2/numpy/PIL → `video_ingest`, contact sheets, `qc_preview` scans, i.e. all visual evidence; jieba → `subtitle_build` line breaking; fontTools → the pre-render tofu check; scenedetect → `detect_shots` shot boundaries |
 | `ffmpeg` + `ffprobe` on PATH, **with libx264 / aac / libmp3lame** | ingestion and probing (Phase 1 can't start); missing encoder = the render dies at the last step, after everything upstream was paid for |
 | that ffmpeg **built with libass + libfreetype** (`subtitles`/`ass`/`drawtext` filters) | subtitle burn-in and title cards |
 | a **CJK font whose cmap really covers Chinese** | Chinese subtitles/titles. This one fails *silently* — see the tofu warning above |
-| cloud ASR credentials or Speech MCP access | `speech_transcribe`; without it there is no transcript, so every speech-driven decision is guesswork. **Under ZCode this is never a gap** — see below |
+| the local `transcribe` CLI (Moss Transcribe WebUI) on PATH | `speech_transcribe`; without it there is no transcript, so every speech-driven decision is guesswork — see below |
 
-### Speech needs no local key under ZCode
+### Speech runs locally through the transcribe CLI
 
-Transcription defaults to the **official channel**, which authenticates
-with identity the ZCode host injects into each `tools/call`. There is nothing to
-configure, nothing to install, and no key to obtain. Two consequences:
+Transcription goes through the local **Moss Transcribe WebUI** deployment's
+`transcribe` CLI. The CLI attaches to a running service (default
+`127.0.0.1:8390`) or starts one automatically and stops it after the job.
+There is no key, no cloud, nothing to configure beyond the CLI being reachable:
 
-- **Never tell the user to set an ASR key to get transcription working**, and
-  never treat a "credentials not set" line as a blocker. The doctor reports this
-  row as `官方通道` whenever `ZCODE_BASE_URL` is present, and the row is
-  soft (`只降级不致命`) in every case.
-- The doctor runs as its **own process**, so it cannot see the per-call identity
-  headers — only whether the official channel exists at all. A *specific* call
-  failing on identity (not logged in, no Coding Plan) surfaces from the tool
-  itself, with a message saying which of the two it is. That is the signal to act
-  on; the doctor's row is not.
-
-Only non-ZCode hosts need configuration, in this order of preference: remote
-Speech MCP (`VE_SPEECH_MCP_URL` / `VE_SPEECH_MCP_TOKEN`), or — as a legacy escape
-hatch for deployments bringing their own speech service — a direct HTTP backend,
-which needs its endpoint and resource/model identifiers in the **process
-environment** (a project `.env` is untrusted for those; it could otherwise
-redirect an authenticated call) plus a key. `/env-check` prints the exact set.
+- **The only requirement is that `transcribe` resolves on PATH** (or
+  `VE_TRANSCRIBE_CMD` points at the executable). The doctor probes exactly
+  that; the row is soft (`只降级不致命`).
+- The service lifecycle (start/model load) is the CLI's job, not the
+  environment's — do not try to pre-start or health-check the WebUI service
+  during setup. A first transcription may take a few minutes while the model
+  loads; that is normal, not a failure.
+- `VE_TRANSCRIBE_HOST` / `VE_TRANSCRIBE_PORT` / `VE_TRANSCRIBE_AUTOSPLIT` /
+  `VE_TRANSCRIBE_BACKEND` are optional tuning knobs; see `.env.example`.
 
 Version floors are the only hard numbers; how the tool gets installed is the
 user's choice — package manager, installer, conda, whatever the machine already
@@ -81,7 +75,7 @@ by hand, use these:
 | pip | 清华 `https://pypi.tuna.tsinghua.edu.cn/simple` — `pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <pkg>` | 阿里云 `https://mirrors.aliyun.com/pypi/simple/` |
 | ffmpeg | **macOS**: `export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles` then `brew install ffmpeg`. **Any platform / no root**: `conda install -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge ffmpeg` — cleanest path, no system package manager touched. | apt sources → Tsinghua/USTC (system-wide change); Windows `winget`/gyan.dev has no mirror concept (use conda) |
 | CJK font | Linux `apt-get install fonts-noto-cjk` (apt mirror helps). mac/Windows already ship 苹方/微软雅黑 — install nothing. | Download NotoSansSC from `github.com/notofonts/noto-cjk` into any directory and point `VE_FONT_DIRS` at it (works without root) |
-| direct speech endpoint (only if you configured one) | **no mirror exists** — it is the service itself. Unreachable = network policy; that's a proxy question, not a mirror one | — |
+| local transcribe CLI | Not a download — it ships with the user's Moss Transcribe WebUI deployment; the fix is PATH or `VE_TRANSCRIBE_CMD` | — |
 
 Notes that matter in practice:
 
@@ -191,10 +185,9 @@ code change, and not `sudo cp` into `/usr/share/fonts`.
   holds the last verdict.
 - Proceeding into a render or a recap with ffmpeg missing libass, letting it
   surface as a mysterious tool error twenty rounds later.
-- **Asking the user for an ASR key.** Under ZCode there is no key to give;
-  the doctor's speech rows say `官方通道` and a failing call reports whether it is
-  a login or a plan problem. Chasing a key wastes the user's turn and fixes nothing.
-- Blaming the plugin for `speech_transcribe` timeouts before checking which
-  channel it used — an unreachable *configured direct endpoint* is a network
-  policy problem no amount of retrying fixes, and it is not even consulted when
-  the official channel or a remote Speech MCP is in play.
+- **Asking the user for an ASR key.** Transcription is local — there is no key
+  to give; the only fix is the `transcribe` CLI being on PATH. Chasing a key
+  wastes the user's turn and fixes nothing.
+- Blaming the plugin for `speech_transcribe` timeouts before checking the local
+  service — the first job on a fresh service pays the model-load cost (minutes),
+  which is normal, not a hang.

@@ -356,7 +356,7 @@ def condense_index(args: dict, ctx: RunContext) -> ToolResult:
     if not transcript_path.is_file():
         return ToolResult(
             text=f"[ERROR] transcript not found: {transcript_path}. Run transcribe first — "
-            "condensing needs timestamped text, and cloud_asr may provide word-level times "
+            "condensing needs timestamped text, and the local ASR provides word-level times "
             "that let cut points land between words instead of inside one."
         )
 
@@ -782,7 +782,7 @@ def _index_text(report: dict[str, Any], table_rows: int, table_path: str) -> str
         if report["timing_source"] == "word_timestamps" else
         "No word-level timestamps (this transcript is segment-timed only), so every cut time inside a unit is "
         "INTERPOLATED. Boundaries will be snapped to detected silences, but filler excision is unsafe and each "
-        "cut needs a listening check. Re-run speech_transcribe(provider=\"cloud_asr\") if you need word timing."
+        "cut needs a listening check. Re-run speech_transcribe if you need word timing."
     )
     candidates = report["trim_candidates"]
     cand_text = "\n".join(
@@ -1189,7 +1189,7 @@ def _resolve_filler_mode(value: object, index: dict[str, Any]) -> tuple[str, str
             "drop_fillers needs word-level timestamps, but this transcript is segment-timed "
             f"(timing_source={index.get('timing_source')!r}). Interpolated filler boundaries clip the "
             "neighbouring word's consonant, which is more audible than the filler. Re-run "
-            'speech_transcribe(provider="cloud_asr") for word times, or leave drop_fillers off and drop whole units instead.'
+            'speech_transcribe for word times, or leave drop_fillers off and drop whole units instead.'
         )
     return mode, None
 
@@ -1927,7 +1927,7 @@ def _plan_text(plan: dict[str, Any], script_path: str, plan_path: str) -> str:
         if plan.get("timing_source") == "word_timestamps" else
         "\nNOTE: this transcript has no word-level timestamps, so the mid-word-cut check COULD NOT RUN. "
         "A clean error count here does not mean the boundaries avoid syllables — it means nothing was measured. "
-        "Every cut needs a listening check, or re-run speech_transcribe(provider=\"cloud_asr\") for word timing and re-plan."
+        "Every cut needs a listening check, or re-run speech_transcribe for word timing and re-plan."
     )
     header = (
         f"[ERROR-LEVEL FLAGS: {errors}] " if errors else ""

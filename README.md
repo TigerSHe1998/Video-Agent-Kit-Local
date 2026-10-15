@@ -1,6 +1,6 @@
-# video-agent-kit
+# video-agent-kit-local
 
-`video-agent-kit` 是自动化视频剪辑工具包。它把视频剪辑需要的特殊能力封装成 MCP 工具和 CLI：媒体探查、标准云端语音转录、完整视频抽帧观察、局部高 fps 复看、基础视频操作、timeline 校验、预览渲染、QC 和可审计修复。
+`video-agent-kit-local` 是自动化视频剪辑工具包（本地化版本）。它把视频剪辑需要的特殊能力封装成 MCP 工具和 CLI：媒体探查、本地语音转录（Moss Transcribe WebUI）、完整视频抽帧观察、局部高 fps 复看、基础视频操作、timeline 校验、预览渲染、QC 和可审计修复。语音转录在本机执行，不需要任何云端凭据。
 
 ## 设计边界
 
@@ -12,7 +12,7 @@
 ## MCP 工具
 
 - `inspect_media`：ffprobe 媒体探查；总体时长优先读 format duration，缺失时回退到 stream duration；`NaN` / `Infinity` 不会被当成有效时长。
-- `speech_transcribe`：标准语音转录工具。配置 `VE_SPEECH_MCP_URL` 时调用远端 HTTP MCP；未配置时，在 ZCode 中优先使用宿主随 `tools/call` 注入身份的官方通道，其他宿主回退到本地兼容后端。对外统一为 `cloud_asr`，不会暴露内部服务商名称。并发限制、限流、网络和服务端瞬时错误默认额外重试 3 次，可用 `retries` / `retry_count` 和 `retry_backoff_seconds` 覆盖；缺凭据、provider 不可用、输入/参数错误不会重试。长媒体会自动拆成最多 `chunk_seconds` 秒的重叠块（默认不超过 1700s）分别转写并合并，块级结果缓存可断点续跑；分块说话人标签带 `p{chunk}_` 前缀，跨块同一人物可能有不同标签。毫秒时间戳会归一成秒；静音音频返回带 `silent_audio` 标注的有效空转录。`transcribe` 保留为兼容 alias。
+- `speech_transcribe`：本地语音转录工具，通过 Moss Transcribe WebUI 的 `transcribe` CLI 执行（CLI 自动对接运行中的服务，无服务时自动拉起）。本地模型提供段级时间戳和说话人分离（词级时间戳是 Moss 模型不支持的，`words` 恒为空，下游按既有降级路径处理）；模型自行判定语言（`language` 入参仅记录）。长音频默认按 30 分钟服务端自动分段（`VE_TRANSCRIBE_AUTOSPLIT`，0 关闭），时间戳修正为全片绝对时间；分段时说话人标签带 `p{段}_` 前缀，跨段同一人物可能有不同标签。服务瞬时错误默认额外重试 1 次；用法/输入错误不重试。毫秒时间戳会归一成秒；静音音频返回带 `silent_audio` 标注的有效空转录。`transcribe` 保留为兼容 alias。
 - `video_ingest`：完整视频抽帧并返回 contact sheet，必须先跑；Claude Code 主 Agent 自己看图并形成理解。显式传入的 `transcript_path` 必须存在；不传 transcript 才表示允许无转录观察；在同一个 MCP 会话里，如果重新观察此前已绑定过 transcript 的同一视频指纹，会复用该视频对应的 transcript。同一路径的视频文件如果被覆盖或替换，必须重新调用 `video_ingest`。只有成功产出 observation package 后，工具才会把该视频记为已 full-ingest；抽帧失败不会推进会话状态。
 - `video_watch_segment`：局部高 fps 复看；单窗口用 `start_time/end_time/fps`，多窗口用 `segments=[{start,end}, ...]` + `fps`，返回片段 contact sheet 和匹配转录。显式传 `video_path` 可直接复看任意存在的视频，不要求先跑完整 `video_ingest`。不带 `video_path` 时默认使用会话里的 active video；如果 active 文件被覆盖或替换，隐式复看会报错并要求显式传当前 `video_path` 或重新 `video_ingest`。显式传入的 `transcript_path` 必须存在；在同一个 MCP 会话里，如果显式传入此前已绑定过 transcript 的同一视频指纹且未传 transcript 参数，会复用该视频对应的 transcript。非数字时间参数会返回结构化错误；明显超过视频时长的窗口会报错，不会静默截断成较短观察。窗口台账按 `(start, end, fps)` 判重：只有时间和 fps 都相同的窗口才会被跳过，换一个 fps 重看同一窗口是新的观察；确有需要时可传 `force=true` 跳过判重。只有成功产出新 contact sheet 后，局部复看才会更新 active-video 会话状态；抽帧失败或 `skipped_duplicate` 不算新的视觉证据，多窗口部分失败时整体结果会带 `[ERROR]` 前缀汇总。
 - `video_basic_operation`：OpenChatCut 风格的确定性基础操作封装，支持 `trim`、`splice`、`speed`、`crop`、`scale`、`rotate`、`flip`、`freeze_frame`。它适合源素材预处理或单步变换；timeline 成片仍应走 `validate_timeline` / `render_preview`。
@@ -21,7 +21,7 @@
 - `qc_preview`：硬性质量检查，包括容器、黑帧、短编辑边界黑帧、静音、冻结帧、音量、音频覆盖时长和空文件；媒体探测失败或显式传入的 `timeline_path` 不存在时直接报错，黑帧 / 静音 / 冻结 / 音量扫描失败会作为 QC error 写入报告。静音和音量扫描只在存在音轨时运行；完全没有音轨的成片会记一条 warning（整片无声），不会静默通过。
 - `timeline_diff`：记录或应用 timeline 修复；`patch` 必须是 JSON object，`apply` 必须是 boolean。支持 `set_timeline_fields`、`set_track_fields`、`add_assets`、`update_assets`、`remove_asset_indices`、`add_tracks`、`insert_tracks`、`replace_tracks`、`remove_track_indices`、`update_clips`、`replace_clips`、`remove_clip_indices`、`move_clips`、`insert_clips` 和 `add_clips`。`update_clips` 是浅层字段合并，字段值为 `null` 表示删除该字段；`set_timeline_fields` 可改项目元数据但不能直接改 `clips/tracks`。`replace/update/remove/move` 索引按补丁前扁平 clip 顺序解释，asset/track 操作用各自数组内的索引解释；结构性 track 操作（add/insert/replace/remove tracks）不能和 clip 操作混在同一个 patch，必须拆成两次 `timeline_diff`。`move_clips` 每次 patch 最多一条，不能与删除操作混用，也不能指向同一个 patch 新插入的 clip。工具会先校验 patch 操作本身和 patch 后的 timeline。`apply=true` 遇到越界 index、非对象 clip/fields、空 patch、多条 move、结构性 track 操作和 clip 操作混用等非法操作时只写 diff 报告，不修改原 timeline。
 
-默认文件契约为 `out/media.json`、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和 `out/report.md`。其中 `out/transcript.json` 是 cloud ASR 可用时的预期产物；如果 cloud ASR 不可用，应在 `out/report.md` 记录限制并继续完成其余闭环。单素材任务可使用 `out/video_ingest.json`；多素材任务可以显式传 `output_json` 写到 `out/ingest/*.json` 或 `out/video_ingest_<source>.json`，并在 `out/media.json` 汇总。
+默认文件契约为 `out/media.json`、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和 `out/report.md`。其中 `out/transcript.json` 是本地 ASR 可用时的预期产物；如果本地 ASR 不可用，应在 `out/report.md` 记录限制并继续完成其余闭环。单素材任务可使用 `out/video_ingest.json`；多素材任务可以显式传 `output_json` 写到 `out/ingest/*.json` 或 `out/video_ingest_<source>.json`，并在 `out/media.json` 汇总。
 
 `out/media.json` 保留给源素材探测。`qc_preview` 内部做媒体探测时会写 `out/preview_media.json` 这类 sidecar，不覆盖源素材 metadata。`validate_timeline` 和 `qc_preview` 会在报告中写入文件 hash；收尾前必须核对这些 hash 以拒绝已经过期的 validation / QC report（由 `video-edit-agent` skill 的完成门负责，不再依赖 hook）。
 
@@ -61,7 +61,7 @@ python3 video-agent-kit/skills/env-setup/scripts/env_doctor.py --fix
 它查的不止"包在不在"：ffmpeg 有没有带 `libx264` / `aac` / `libmp3lame` 与
 `libass`（缺了字幕烧录必挂，但只在渲染最后一步才炸）、本机中文字体的 cmap 是不是
 真覆盖中文（`fc-match` 对着没装的中文族会返回 DejaVu，烧出来是豆腐块而 ffmpeg
-退出码 0）、以及语音走的是哪条通道（在 ZCode 里就是"官方通道，本地无需 key"，不会催你配凭据）。
+退出码 0）、以及本地转录 CLI（`transcribe`）在不在 PATH 上。
 
 也可以手工只装 Python 依赖（注意 `scenedetect` 必须 `--no-deps`，否则会把 GUI 版
 opencv 盖到 `opencv-python-headless` 的 `cv2` 上，两个包一起坏）：
@@ -110,20 +110,16 @@ video-edit-agent classify
 
 完整可配置项参考 `.env.example`。
 
-**语音转录在 ZCode 里不需要任何配置。** `speech_transcribe` 默认走官方通道，
-身份由宿主随每次 `tools/call` 注入，没有 key 可配、也没有端点要指。下面这些只对非 ZCode 宿主有意义，
-`/env-check` 里这项也永远是 soft，不是硬缺口。
+**语音转录完全本地化。** `speech_transcribe` 通过本机的 Moss Transcribe WebUI `transcribe` CLI 执行：CLI 自动对接运行中的服务（默认 `127.0.0.1:8390`），本机无服务时自动拉起并在任务结束后停止。不需要任何 key 或云端凭据；唯一的前置是 `transcribe` CLI 在 PATH 上（或显式指定路径）。
 
-必须或高价值配置：
+可选配置：
 
-- `VE_SPEECH_MCP_URL` / `VE_SPEECH_MCP_TOKEN`：Claude Code 等非 ZCode 宿主可配置的远端 HTTP MCP 语音服务，也是这类宿主的推荐做法（付费能力与凭据都留在服务端）。ZCode 清单不暴露这两个用户配置。显式设置 URL 时远端 MCP 优先级最高；`VE_SPEECH_MCP_ASR_TRANSFER=auto|path|base64` 控制 ASR 媒体传输，默认对 localhost/shared-storage 走路径，对非本机远端抽取压缩音频后 base64 上传。
-- `VE_ASR_PROVIDER`：`speech_transcribe` / `transcribe` 的 provider 选择，`auto`（默认）/ `cloud_asr`。
-- 直连 HTTP 兼容后端（legacy escape hatch，自带语音服务时才用）：插件不内置任何服务地址、模型名或资源标识，全部由部署方提供。
-  - `VE_SPEECH_ASR_ENDPOINT` **只从进程环境读，不吃 `.env`**：项目级 `.env` 是不可信输入，若它能指定端点，仓库里的一个 `.env` 就能把带着 API key 的请求导向攻击者主机。请在启动 server 的地方 export。
-  - `VE_SPEECH_ASR_RESOURCE_ID`（必填）、`VE_SPEECH_ASR_FLASH_RESOURCE_ID`（可选，同步回退资源）。
-  - `VE_SPEECH_ASR_API_KEY`，或 `VE_SPEECH_ASR_APP_KEY` + `VE_SPEECH_ASR_ACCESS_KEY`。
+- `VE_TRANSCRIBE_CMD`：`transcribe` 可执行文件路径。默认从 PATH 解析（Windows 上是 `transcribe.bat`）。
+- `VE_TRANSCRIBE_HOST` / `VE_TRANSCRIBE_PORT`：WebUI 服务地址，默认 `127.0.0.1:8390`。
+- `VE_TRANSCRIBE_AUTOSPLIT`：长音频自动分段分钟数，默认 30，`0` 关闭。服务端精确切分并把时间戳修正为全片绝对时间；分段时说话人标签带 `p{段}_` 前缀。
+- `VE_TRANSCRIBE_BACKEND`：推理设备名（`transcribe --list-backend` 查看），默认沿用运行中服务已加载的后端。
 
-`speech_transcribe` 支持 `retries` / `retry_count` 表示瞬时错误的额外重试次数，默认 3，范围 0~10；`retry_backoff_seconds` 是指数退避初始秒数，默认 30 秒。只重试网络、timeout、429/5xx、服务端错误、并发/限流等瞬时失败；缺 key、provider 不可用、输入/参数错误不会重试。
+`speech_transcribe` 支持 `retries` / `retry_count` 表示服务瞬时错误的额外重试次数，默认 1，范围 0~10；`retry_backoff_seconds` 是指数退避初始秒数，默认 10 秒。只重试服务连接/中断等瞬时失败；用法/输入错误不会重试。
 
 ## CLI 使用
 

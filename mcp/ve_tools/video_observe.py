@@ -94,18 +94,18 @@ def video_ingest(args: dict, ctx: RunContext) -> ToolResult:
 
 def append_transcribe_nudge(result: ToolResult, ctx: RunContext | None = None) -> ToolResult:
     """Transcript-less ingest is usually a skipped step, not a real constraint:
-    when cloud ASR is available, tell the agent the standard flow."""
-    from .speech_service import cloud_asr_available
+    when local ASR is available, tell the agent the standard flow."""
+    from .local_asr import local_asr_status
 
     try:
-        provider_available = cloud_asr_available(ctx)
+        provider_available = local_asr_status()["available"]
     except Exception:
         return result
     if not provider_available:
         return result
     result.text += (
-        "\n\n[transcript] No transcript is attached to this observation, but an ASR provider is available "
-        "(cloud_asr). Standard flow: call "
+        "\n\n[transcript] No transcript is attached to this observation, but the local ASR "
+        "provider is available. Standard flow: call "
         "speech_transcribe(input_path=<this video>) to produce out/transcript.json, then re-run video_ingest with "
         "transcript_path so every visual decision is paired with matching speech text."
     )

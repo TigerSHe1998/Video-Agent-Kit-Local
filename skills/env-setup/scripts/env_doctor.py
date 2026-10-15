@@ -63,21 +63,6 @@ PIP_INDEX = os.environ.get("VE_PIP_INDEX", PIP_TSINGHUA)
 HOMEBREW_BOTTLE = "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
 CONDA_FORGE_TSINGHUA = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"
 
-# 直连 HTTP 兼容通道的端点。没有内置默认值: 这个通道是 legacy escape hatch, 只有
-# 部署方显式注入端点时才存在, 所以未配置就是"这条通道不适用", 不是"探测失败"。
-SPEECH_ENDPOINT = os.environ.get("VE_SPEECH_ASR_ENDPOINT") or os.environ.get("VE_CLOUD_ASR_ENDPOINT")
-SPEECH_ENDPOINT_LABEL = "configured compatibility speech endpoint"
-
-
-def under_zcode_host() -> bool:
-    """在 ZCode 宿主里跑 → 语音走官方通道, 本地不需要任何 key。
-
-    ZCODE_BASE_URL 由宿主 spawn 时注入。注意体检脚本是**独立进程**, 看不到随单次
-    ``tools/call`` 的 ``_meta`` 下发的身份头, 所以这里只能判"官方通道在不在", 判不了
-    "这次调用的身份好不好" —— 后者由 MCP 工具自己在调用时报。
-    """
-    return bool((os.environ.get("ZCODE_BASE_URL") or "").strip())
-
 # 渲染要落 preview/final mp4 + 抽帧 contact sheet, 空间不够是"渲到一半炸"。
 MIN_FREE_GB = 5
 
@@ -287,72 +272,17 @@ def probe_font() -> tuple[bool, str]:
     return True, f"{d['regular']}{tail}"
 
 
-def _status_line(module: str, func: str, extra: tuple[str, ...]) -> tuple[bool, str]:
-    try:
-        mod = _load_kit_module(module)
-        st = getattr(mod, func)()
-    except Exception as e:
-        return False, f"状态探测失败: {type(e).__name__}: {e}"
-    if st.get("available"):
-        bits = [f"{k}={st[k]}" for k in extra if st.get(k)]
-        return True, "可用" + (" (" + ", ".join(bits) + ")" if bits else "")
-    return False, "; ".join(st.get("reasons") or ["未配置"])
-
-
 def probe_asr() -> tuple[bool, str]:
-    if under_zcode_host():
-        return True, "官方通道 (宿主注入身份, 本地无需配置 key)"
-    return _status_line("cloud_asr", "cloud_asr_status", ("auth_mode",))
-
-
-def probe_speech_net() -> tuple[bool, str]:
-    """直连兼容端点的出网可达性。
-
-    只有部署方显式配了兼容端点时才有意义: 官方通道走 ZCODE_BASE_URL, 远端 Speech MCP
-    走 VE_SPEECH_MCP_URL, 两者都不经这个域名。没配就直接判"不适用", 免得体检去连一个
-    根本不会被调用的主机, 再把结论报成缺口。
-
-    分两条路, 都必须是**有界**的 (体检不能自己变成两分钟的挂起):
-    - 配了 http(s)_proxy: 走 requests, 因为真调用也走代理, 结论才对得上;
-      连的是代理那一个地址, 不会一路重试。
-    - 没配代理: 自己解析 DNS 再 TCP 连**一个**地址。requests/urllib3 会把每个
-      解析出来的 IP 各试一遍 (多 A 记录域名 → 5s×N), 而"通不通"只需要
-      一次握手。DNS 失败与端口不通分开报: 前者是解析/网络策略, 后者多半是防火墙。
-    """
-    if not SPEECH_ENDPOINT:
-        return True, "未配置直连兼容端点, 不适用 (官方通道 / 远端 Speech MCP 不经此域名)"
-    proxy = next((f"{k}={v}" for k, v in sorted(os.environ.items())
-                  if k.lower() in ("https_proxy", "http_proxy") and v), "")
-    if proxy:
-        try:
-            import requests
-
-            resp = requests.get(SPEECH_ENDPOINT, timeout=(5, 10), allow_redirects=False)
-        except Exception as e:
-            return False, (f"{SPEECH_ENDPOINT_LABEL} 经代理 ({proxy}) 连不上: "
-                           f"{type(e).__name__}: {str(e).splitlines()[0][:160]}")
-        # 任何 HTTP 响应都算可达: 不带鉴权访问根路径大概率 4xx, 链路照样是通的。
-        return True, f"{SPEECH_ENDPOINT_LABEL} HTTP {resp.status_code} (经代理 {proxy})"
-
-    import socket
-    from urllib.parse import urlsplit
-
-    parts = urlsplit(SPEECH_ENDPOINT)
-    host = parts.hostname or SPEECH_ENDPOINT
-    port = parts.port or (443 if parts.scheme == "https" else 80)
-    try:
-        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    except OSError as e:
-        return False, f"{SPEECH_ENDPOINT_LABEL} DNS 解析失败: {e.__class__.__name__}: {e}"
-    family, socktype, proto, _, addr = infos[0]
-    try:
-        with socket.socket(family, socktype, proto) as s:
-            s.settimeout(5)
-            s.connect(addr)
-    except OSError as e:
-        return False, (f"{SPEECH_ENDPOINT_LABEL} 连不上: {e.__class__.__name__}: {e}"
-                       "; 未检测到 http(s)_proxy 环境变量")
-    return True, f"{SPEECH_ENDPOINT_LABEL} 可连 (共 {len(infos)} 个地址)"
+    """本地转录 CLI (Moss Transcribe WebUI)。CLI 在 PATH 或 VE_TRANSCRIBE_CMD 即可用;
+    无服务时它自启, 不需要预检服务端口。"""
+    cmd = (os.environ.get("VE_TRANSCRIBE_CMD") or "").strip() or "transcribe"
+    found = cmd if Path(cmd).is_file() else shutil.which(cmd)
+    if not found:
+        return False, ("transcribe CLI 未找到 — Moss Transcribe WebUI 的 cli/ 需加入 PATH, "
+                       "或设 VE_TRANSCRIBE_CMD 指向 transcribe 可执行文件")
+    host = (os.environ.get("VE_TRANSCRIBE_HOST") or "127.0.0.1").strip()
+    port = (os.environ.get("VE_TRANSCRIBE_PORT") or "8390").strip()
+    return True, f"{found} (服务 {host}:{port}, 无服务时自动拉起)"
 
 
 def probe_disk() -> tuple[bool, str]:
@@ -367,7 +297,6 @@ def probe_disk() -> tuple[bool, str]:
 
 # ── 检查清单 (顺序即展示顺序) ────────────────────────────────────────────────
 PY_MODULES = [
-    ("requests", "requests>=2.31.0", "cloud ASR 的 HTTP 调用 — 缺则转录不可用"),
     ("cv2", "opencv-python-headless>=4.8.0,<5.0.0", "video_ingest 抽帧 / 局部复看 / QC 扫描"),
     ("numpy", "numpy>=1.24.0", "抽帧索引与帧差计算"),
     ("PIL", "pillow>=10.0.0", "contact sheet 拼图 (模型能看到的那张图)"),
@@ -475,36 +404,18 @@ CHECKS: list[Check] = [
                    f"#   {'set' if OS == 'windows' else 'export'} VE_FONT_DIRS=<字体目录>"
                    f"   (多个目录用 {os.pathsep!r} 分隔)",
                    "# 无 root 也可以: 下 NotoSansSC-400.ttf/-700.ttf 到任意目录再设 VE_FONT_DIRS"]),
-    # 语音凭据永远是 soft 的, 而且在 ZCode 里根本不是一项配置。
-    #
-    # 默认通道是宿主注入身份的官方 Server MCP —— 本地一个 key 都不需要。独立的 doctor
-    # 进程看不到随单次 ``tools/call`` 下发的身份头, 只能看见 ZCODE_BASE_URL 在不在;
-    # 因此在 ZCode 里这两项直接报"官方通道", 不去探测兼容后端, 也不摆配置命令。
-    # 0.4.2 之前这里会报"凭据未配置"并给出写 .env 的修复命令, 于是模型和用户都以为
-    # 必须先在本地配 key 才能转录 —— 那是这条提示造成的错觉, 不是真实约束。
-    Check("asr-cred", "语音转录通道", "speech_transcribe — 缺则没有转录, 语音类任务全瘸",
+    # 本地转录: Moss Transcribe WebUI 的 CLI 在 PATH 上即可用, 无服务时 CLI 自启。
+    # 只查 CLI 在不在, 不预连服务端口 (服务启动/模型加载是分钟级, 不该挡体检)。
+    Check("asr-cli", "本地转录 CLI (transcribe)", "speech_transcribe — 缺则没有转录, 语音类任务全瘸",
           probe_asr,
-          need="ZCode 中无需配置 (宿主注入身份); 其他宿主需远端 Speech MCP, "
-               "或直连兼容后端 VE_SPEECH_ASR_ENDPOINT + RESOURCE_ID + API_KEY",
-          fix=["# 在 ZCode 中运行时无需任何配置: 官方通道用宿主随调用注入的身份",
-               f"# 其他宿主 —— 写进 {PLUGIN_ROOT / '.env'} (插件级默认) 或 {PROJECT_DIR / '.env'} (按项目覆盖):",
-               "#   VE_SPEECH_MCP_URL=<remote MCP URL>      # 推荐: 付费能力集中在服务端",
-               "#   VE_SPEECH_MCP_TOKEN=<token>",
-               "# 或自带直连服务 (端点与资源标识只从进程环境读, 不吃 .env):",
-               "#   export VE_SPEECH_ASR_ENDPOINT=<https endpoint>",
-               "#   export VE_SPEECH_ASR_RESOURCE_ID=<resource id>",
-               "#   VE_SPEECH_ASR_API_KEY=<你的 key>",
-               f"# 完整可配置项见 {PLUGIN_ROOT / '.env.example'}; 不要把 key 写进 .env.example"],
-          needs="py-requests", soft=True),
-    Check("speech-net", "直连兼容端点可达", "只在自带直连语音服务时适用",
-          probe_speech_net,
-          need=f"配了直连兼容端点时能访问 {SPEECH_ENDPOINT_LABEL}",
-          fix=["# 公司网络/代理下先配代理再重试:",
-               *by_os(windows=["#   set HTTPS_PROXY=http://<proxy>:<port>"],
-                      any=["#   export https_proxy=http://<proxy>:<port>"]),
-               "# 这个域名没有国内镜像可换 (是服务本身); 连不上就是网络策略问题",
-               "# 首次经代理的请求偶尔会失败, 配好后重试一次再判断"],
-          needs="py-requests", soft=True),
+          need="Moss Transcribe WebUI 部署好且 cli/ 目录在 PATH 上 (或 VE_TRANSCRIBE_CMD 指向 transcribe)",
+          fix=["# 安装 Moss Transcribe WebUI 后, 把其 cli/ 目录加入 PATH:",
+               *by_os(windows=["#   setx PATH \"%PATH%;C:\\AI\\transcribe_cpp_webui\\cli\"  (或系统设置里加, 重启终端生效)"],
+                      any=["#   export PATH=\"$PATH:/path/to/transcribe_cpp_webui/cli\"  (写进 ~/.bashrc)"]),
+               "# 或在 .env 里显式指定可执行文件:",
+               f"#   {'set' if OS == 'windows' else 'export'} VE_TRANSCRIBE_CMD=C:/AI/transcribe_cpp_webui/cli/transcribe.bat",
+               "# 服务地址可配 (默认 127.0.0.1:8390): VE_TRANSCRIBE_HOST / VE_TRANSCRIBE_PORT"],
+          soft=True),
     Check("disk", f"项目盘可用空间 ≥ {MIN_FREE_GB}G", "预览/成片 mp4 + 抽帧图落在项目目录",
           probe_disk,
           need=f"{PROJECT_DIR} 所在盘 ≥ {MIN_FREE_GB}G 空闲 (长视频 recap 要更多)",

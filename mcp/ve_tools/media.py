@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import base64
 import json
 import math
 import shutil
-import subprocess
 from .ffproc import run_proc
 import time
 from pathlib import Path
@@ -13,37 +11,13 @@ from typing import Any
 
 from .result import ToolResult
 from .run_context import RunContext, clean_env
-from .cloud_asr import prepare_asr_audio, cloud_asr_status, cloud_asr_transcribe_payload
-from .zcode_speech import (
-    max_chunk_seconds as zcode_speech_max_chunk_seconds,
-    zcode_speech_status,
-    zcode_speech_transcribe_payload,
-)
-from .speech_service import (
-    call_remote_speech_tool,
-    extract_transcript_payload,
-    genericize_data,
-    genericize_result,
-    genericize_text,
-    remote_asr_transfer_mode,
-    remote_speech_configured,
-)
+from .local_asr import local_asr_status, local_asr_transcribe_payload
 from .transcript import read_transcript_text
 
-ASR_AUDIO_BITRATE = "64k"
-ASR_SAMPLE_RATE = "16000"
-ASR_POLL_INTERVAL_SECONDS = 2.5
 ASR_TIMEOUT_SECONDS = 3600.0
-# Direct-HTTP backend single-submit limit observed in production: longer media is more
-# likely to time out or be rejected. Split long inputs into overlapping chunks
-# and merge timestamped segments back onto the source timeline.
-ASR_CHUNK_SECONDS = 1700.0
-ASR_CHUNK_THRESHOLD_SECONDS = 1800.0
-ASR_CHUNK_OVERLAP_SECONDS = 2.0
-ASR_DEFAULT_RETRIES = 3
+ASR_DEFAULT_RETRIES = 1
 ASR_MAX_RETRIES = 10
-ASR_RETRY_BACKOFF_SECONDS = 30.0
-REMOTE_ASR_UPLOAD_MAX_BYTES = 180 * 1024 * 1024
+ASR_RETRY_BACKOFF_SECONDS = 10.0
 
 
 def run_json(cmd: list[str], timeout: int = 60) -> dict:
@@ -501,25 +475,17 @@ def stream_rotation(stream: dict) -> str | None:
     return None
 
 
-ASR_PROVIDERS = {"auto", "cloud", "cloud_asr", "remote", "speech"}
-LOCAL_ASR_ALIASES = {"auto", "cloud", "cloud_asr", "remote", "speech"}
+PROVIDER_NAME = "local_asr"
+ASR_PROVIDERS = {"auto", "local_asr", "local"}
 
 
 def transcribe(args: dict, ctx: RunContext) -> ToolResult:
-    """Compatibility wrapper. Paid ASR is exposed as speech_transcribe."""
+    """Compatibility alias. ASR is exposed as speech_transcribe."""
     return speech_transcribe(args, ctx)
 
 
 def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
-    remote = remote_speech_transcribe(args, ctx)
-    if remote is not None:
-        return remote
-    return local_speech_transcribe(args, ctx)
-
-
-def remote_speech_transcribe(args: dict, ctx: RunContext) -> ToolResult | None:
-    if not remote_speech_configured():
-        return None
+    """Transcribe a media file with the local transcribe CLI (Moss WebUI backend)."""
     if not args.get("input_path"):
         return ToolResult(text="[ERROR] input_path is required")
     input_path = ctx.resolve(args["input_path"])
@@ -527,39 +493,63 @@ def remote_speech_transcribe(args: dict, ctx: RunContext) -> ToolResult | None:
         return ToolResult(text=f"[ERROR] File not found: {input_path}")
     output_path = ctx.resolve(args.get("output_json") or "out/transcript.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    remote_args = {
-        key: value
-        for key, value in args.items()
-        if key not in {"output_json", "work_dir"}
-    }
-    transfer_mode = remote_asr_transfer_mode()
-    if transfer_mode == "base64":
-        prepared = prepare_remote_asr_upload(input_path, args, ctx)
-        if isinstance(prepared, ToolResult):
-            return prepared
-        upload_path, input_format = prepared
-        remote_args.pop("input_path", None)
-        remote_args["audio_base64"] = base64.b64encode(upload_path.read_bytes()).decode("ascii")
-        remote_args["input_format"] = input_format
-        remote_args["source_name"] = input_path.name
-    else:
-        remote_args["input_path"] = str(input_path)
-    result = call_remote_speech_tool(
-        "transcribe",
-        remote_args,
-        timeout=float(args.get("timeout_seconds") or ASR_TIMEOUT_SECONDS),
-    )
-    if result.text.startswith("[ERROR]"):
-        return result
-    payload = extract_transcript_payload(result.data)
-    if payload is None:
+
+    provider_arg = str(args.get("provider") or clean_env("VE_ASR_PROVIDER") or "auto").strip().lower()
+    if provider_arg not in ASR_PROVIDERS:
         return ToolResult(
-            text="[ERROR] remote speech transcription returned no transcript payload",
-            data=result.data,
+            text="[ERROR] provider must be auto or local_asr",
+            data={"supported_providers": ["auto", "local_asr"]},
         )
-    payload = sanitize_transcript_payload(payload)
-    payload["source_media"] = str(input_path)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    retries = coerce_asr_retry_count(args.get("retries", args.get("retry_count")))
+    if isinstance(retries, ToolResult):
+        return retries
+    retry_backoff_seconds = coerce_nonnegative_number(
+        args.get("retry_backoff_seconds"), "retry_backoff_seconds", ASR_RETRY_BACKOFF_SECONDS,
+    )
+    if isinstance(retry_backoff_seconds, ToolResult):
+        return retry_backoff_seconds
+    timeout_seconds = coerce_positive_number(args.get("timeout_seconds"), "timeout_seconds", ASR_TIMEOUT_SECONDS)
+    if isinstance(timeout_seconds, ToolResult):
+        return timeout_seconds
+
+    diarize = args.get("diarize")
+    if diarize is None:
+        diarize = True
+    if not isinstance(diarize, bool):
+        return ToolResult(text="[ERROR] diarize must be a boolean")
+
+    started = time.time()
+    # work_dir 按源路径哈希隔离: 不同目录的同名源视频不共用转写中间产物
+    if args.get("work_dir"):
+        work_dir = ctx.resolve(args["work_dir"])
+    else:
+        path_digest = hashlib.sha256(str(input_path.resolve()).encode("utf-8")).hexdigest()[:8]
+        work_dir = ctx.resolve(f".video_agent/asr/{input_path.stem}_{path_digest}")
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    result, retry_attempts = run_asr_with_retries(
+        lambda: local_asr_transcribe_payload(
+            input_path,
+            work_dir,
+            diarize=diarize,
+            autosplit_min=args.get("autosplit_min"),
+            backend=args.get("backend"),
+            timeout_seconds=float(timeout_seconds),
+            started=started,
+        ),
+        retries=retries,
+        retry_backoff_seconds=float(retry_backoff_seconds),
+    )
+    if isinstance(result, ToolResult):
+        return result
+    transcript_payload, job_json_path = result
+    transcript_payload["retry_attempts"] = retry_attempts
+    transcript_payload["max_retries"] = retries
+
+    output_path.write_text(
+        json.dumps(transcript_payload, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
     transcript_text = read_transcript_text(output_path)
     transcript_fingerprint = ctx.file_fingerprint(output_path)
     ctx.remember_transcript_for_video(
@@ -574,424 +564,34 @@ def remote_speech_transcribe(args: dict, ctx: RunContext) -> ToolResult | None:
         ctx.active_transcript_path = output_path
         ctx.active_transcript_text = transcript_text
         ctx.active_transcript_fingerprint = transcript_fingerprint
+
     data = {
-        "provider": "cloud_asr",
+        "provider": PROVIDER_NAME,
         "tool": "speech_transcribe",
         "output_json": str(output_path),
         "source_media": str(input_path),
-        "language": payload.get("language") or args.get("language") or "zh",
-        "word_count": len(payload.get("words", [])),
-        "segment_count": len(payload.get("segments", [])),
-        "remote_mcp": True,
-        "remote_transfer": transfer_mode,
-        **({
-            "silent_audio": True,
-        } if payload.get("silent_audio") else {}),
-    }
-    return ToolResult(
-        text=f"cloud_asr transcript written: {ctx.virtualize(output_path)}",
-        data=data,
-        artifacts=[str(output_path)],
-    )
-
-
-def prepare_remote_asr_upload(input_path: Path, args: dict, ctx: RunContext) -> tuple[Path, str] | ToolResult:
-    if args.get("work_dir"):
-        work_dir = ctx.resolve(args["work_dir"])
-    else:
-        path_digest = hashlib.sha256(str(input_path.resolve()).encode("utf-8")).hexdigest()[:8]
-        work_dir = ctx.resolve(f".video_agent/speech_mcp_upload/{input_path.stem}_{path_digest}")
-    work_dir.mkdir(parents=True, exist_ok=True)
-    prepared = prepare_asr_audio(input_path, work_dir)
-    if isinstance(prepared, ToolResult):
-        return genericize_result(prepared)
-    upload_path, input_format, _source_kind = prepared
-    try:
-        upload_bytes = upload_path.stat().st_size
-    except OSError as exc:
-        return ToolResult(text=f"[ERROR] failed to stat remote ASR upload audio: {exc}", data={"retryable": True})
-    try:
-        max_bytes = int(clean_env("VE_SPEECH_MCP_MAX_UPLOAD_BYTES") or str(REMOTE_ASR_UPLOAD_MAX_BYTES))
-    except ValueError:
-        max_bytes = REMOTE_ASR_UPLOAD_MAX_BYTES
-    if upload_bytes > max_bytes:
-        return ToolResult(
-            text=(
-                f"[ERROR] remote ASR upload audio too large ({upload_bytes / 2**20:.0f} MiB > "
-                f"{max_bytes / 2**20:.0f} MiB); use shared-storage path mode or split the source"
-            ),
-            data={"recoverable": False, "retryable": False},
-        )
-    return upload_path, input_format
-
-
-def local_speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
-    if not args.get("input_path"):
-        return ToolResult(text="[ERROR] input_path is required")
-    input_path = ctx.resolve(args["input_path"])
-    if not input_path.is_file():
-        return ToolResult(text=f"[ERROR] File not found: {input_path}")
-    output_path = ctx.resolve(args.get("output_json") or "out/transcript.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    language = str(args.get("language") or "zh").strip() or "zh"
-    timeout_seconds = coerce_positive_number(args.get("timeout_seconds"), "timeout_seconds", ASR_TIMEOUT_SECONDS)
-    if isinstance(timeout_seconds, ToolResult):
-        return timeout_seconds
-    poll_interval_seconds = coerce_positive_number(
-        args.get("poll_interval_seconds"),
-        "poll_interval_seconds",
-        ASR_POLL_INTERVAL_SECONDS,
-    )
-    if isinstance(poll_interval_seconds, ToolResult):
-        return poll_interval_seconds
-    retries = coerce_asr_retry_count(args.get("retries", args.get("retry_count")))
-    if isinstance(retries, ToolResult):
-        return retries
-    retry_backoff_seconds = coerce_nonnegative_number(
-        args.get("retry_backoff_seconds"),
-        "retry_backoff_seconds",
-        ASR_RETRY_BACKOFF_SECONDS,
-    )
-    if isinstance(retry_backoff_seconds, ToolResult):
-        return retry_backoff_seconds
-
-    provider_arg = str(args.get("provider") or clean_env("VE_ASR_PROVIDER") or "auto").strip().lower()
-    if provider_arg not in ASR_PROVIDERS:
-        return ToolResult(
-            text="[ERROR] provider must be auto or cloud",
-            data={"supported_providers": ["auto", "cloud"]},
-        )
-    zcode_status = zcode_speech_status(ctx)
-    compat_status = cloud_asr_status() if provider_arg in LOCAL_ASR_ALIASES else None
-    if provider_arg in LOCAL_ASR_ALIASES:
-        if zcode_status["available"]:
-            backend = "zcode_official"
-        elif compat_status["available"]:
-            backend = "local_compat"
-        else:
-            return ToolResult(
-                text=(
-                    "[ERROR] cloud_asr is not available: "
-                    + genericize_text(
-                        "official channel: " + "; ".join(zcode_status["reasons"])
-                        + ". local compatibility channel: " + "; ".join(compat_status["reasons"])
-                    )
-                ),
-                data={
-                    "recoverable": True,
-                    "official_channel": genericize_data(zcode_status),
-                    "cloud_asr": genericize_data(compat_status),
-                },
-            )
-        provider = "cloud_asr"
-    else:
-        provider = provider_arg
-
-    started = time.time()
-    # 默认 work_dir 加路径哈希: 只按 stem 键控时, 不同目录的同名源视频会共用
-    # .video_agent/asr/{stem}/, 提取音频/中间产物被后一次调用 -y 覆盖, 前一次
-    # 返回的 artifacts 静默变成另一个视频的音频 (与帧目录同 stem 互删同类洞)
-    if args.get("work_dir"):
-        work_dir = ctx.resolve(args["work_dir"])
-    else:
-        path_digest = hashlib.sha256(str(input_path.resolve()).encode("utf-8")).hexdigest()[:8]
-        work_dir = ctx.resolve(f".video_agent/asr/{input_path.stem}_{path_digest}")
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    def transcribe_one(
-        audio_path: Path, out_dir: Path, *, started_at: float
-    ) -> tuple[dict[str, Any], Path] | ToolResult:
-        if backend == "zcode_official":
-            return zcode_speech_transcribe_payload(
-                audio_path,
-                out_dir,
-                ctx=ctx,
-                language=language,
-                timeout_seconds=float(timeout_seconds),
-                started=started_at,
-            )
-        return cloud_asr_transcribe_payload(
-            audio_path,
-            out_dir,
-            language=language,
-            timeout_seconds=float(timeout_seconds),
-            poll_interval_seconds=float(poll_interval_seconds),
-            started=started_at,
-        )
-
-    if provider == "cloud_asr":
-        default_chunk_seconds = (
-            zcode_speech_max_chunk_seconds() if backend == "zcode_official" else ASR_CHUNK_SECONDS
-        )
-        chunk_threshold_seconds = (
-            default_chunk_seconds if backend == "zcode_official" else ASR_CHUNK_THRESHOLD_SECONDS
-        )
-        chunk_seconds = coerce_positive_number(
-            args.get("chunk_seconds"), "chunk_seconds", default_chunk_seconds
-        )
-        if isinstance(chunk_seconds, ToolResult):
-            return chunk_seconds
-        duration = media_duration_seconds(input_path)
-        if duration and duration > max(float(chunk_seconds), chunk_threshold_seconds):
-            asr_result = cloud_asr_chunked_payload(
-                input_path,
-                work_dir,
-                backend=backend,
-                transcribe_one=transcribe_one,
-                language=language,
-                started=started,
-                duration=duration,
-                chunk_seconds=float(chunk_seconds),
-                retries=retries,
-                retry_backoff_seconds=float(retry_backoff_seconds),
-            )
-        else:
-            asr_result, retry_attempts = run_asr_with_retries(
-                lambda: transcribe_one(input_path, work_dir, started_at=started),
-                retries=retries,
-                retry_backoff_seconds=float(retry_backoff_seconds),
-            )
-        if isinstance(asr_result, ToolResult):
-            return genericize_result(asr_result)
-        transcript_payload, asr_source = asr_result
-        if not transcript_payload.get("chunks"):
-            transcript_payload["retry_attempts"] = retry_attempts
-            transcript_payload["max_retries"] = retries
-        transcript_payload = sanitize_transcript_payload(transcript_payload)
-
-    output_path.write_text(json.dumps(transcript_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    transcript_text = read_transcript_text(output_path)
-    transcript_fingerprint = ctx.file_fingerprint(output_path)
-    ctx.remember_transcript_for_video(input_path, output_path, transcript_text,
-                                      transcript_fingerprint=transcript_fingerprint)
-    if (
-        ctx.active_video_path is not None
-        and ctx.active_video_key is not None
-        and ctx.active_video_key == ctx.video_memory_key(input_path)
-    ):
-        ctx.active_transcript_path = output_path
-        ctx.active_transcript_text = transcript_text
-        ctx.active_transcript_fingerprint = transcript_fingerprint
-    data = {
-        "provider": provider,
-        "requested_provider": provider_arg if provider_arg != "cloud_asr" else "cloud",
-        "tool": "speech_transcribe",
-        "channel": "zcode_official" if backend == "zcode_official" else "local_compat",
-        "output_json": str(output_path),
-        "source_media": str(input_path),
-        "asr_audio": str(asr_source),
-        "language": transcript_payload.get("language") or language,
+        "job_json": str(job_json_path),
+        "language": transcript_payload.get("language") or "",
         "word_count": len(transcript_payload.get("words", [])),
         "segment_count": len(transcript_payload.get("segments", [])),
-        "retry_attempts": transcript_payload.get("retry_attempts", 0),
-        "max_retries": retries,
-        "elapsed_seconds": round(time.time() - started, 3),
-    }
-    if provider == "cloud_asr":
-        data["n_speakers"] = len({
+        "n_speakers": len({
             seg.get("speaker") for seg in transcript_payload.get("segments", [])
             if seg.get("speaker")
-        }) or None
-        if transcript_payload.get("silent_audio"):
-            data["silent_audio"] = True
-        if transcript_payload.get("chunks"):
-            data["chunks"] = transcript_payload["chunks"]
-            data["chunk_seconds"] = transcript_payload.get("chunk_seconds")
-    return ToolResult(
-        text=f"{provider} transcript written: {ctx.virtualize(output_path)}",
-        data=data,
-        artifacts=[str(output_path), str(asr_source)],
-    )
-
-
-def sanitize_transcript_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    out = dict(genericize_data(payload))
-    out["provider"] = "cloud_asr"
-    # Transcripts cached by an older plugin version carry a vendor-prefixed
-    # request-id key. Fold any such key into the neutral name so re-read payloads
-    # stay branding-free too, rather than leaking through this function untouched.
-    for legacy_key in [k for k in out if k != "request_id" and k.endswith("_request_id")]:
-        out.setdefault("request_id", out[legacy_key])
-        out.pop(legacy_key, None)
-    for key in ("resource_id", "interface", "fallback_from", "fallback_reason"):
-        out.pop(key, None)
-    if isinstance(out.get("note"), str):
-        out["note"] = genericize_text(out["note"])
-    if isinstance(out.get("warnings"), list):
-        out["warnings"] = [genericize_text(item) for item in out["warnings"]]
-    return out
-
-
-def media_duration_seconds(path: Path) -> float | None:
-    if not shutil.which("ffprobe"):
-        return None
-    try:
-        data = run_json([
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_format", "-show_streams", str(path)
-        ], timeout=120)
-    except Exception:
-        return None
-    duration = safe_float(data.get("format", {}).get("duration"))
-    if duration is None:
-        streams = [
-            safe_float(s.get("duration"))
-            for s in data.get("streams", [])
-            if isinstance(s, dict)
-        ]
-        streams = [value for value in streams if value is not None]
-        duration = max(streams) if streams else None
-    return duration
-
-
-def cloud_asr_chunked_payload(
-    input_path: Path,
-    work_dir: Path,
-    *,
-    backend: str,
-    transcribe_one: Any,
-    language: str,
-    started: float,
-    duration: float,
-    chunk_seconds: float,
-    retries: int,
-    retry_backoff_seconds: float,
-) -> tuple[dict[str, Any], Path] | ToolResult:
-    """Transcribe long media through either cloud channel in resumable chunks."""
-    if not shutil.which("ffmpeg"):
-        return ToolResult(text="[ERROR] ffmpeg not found on PATH; required for chunked ASR")
-    full_audio = work_dir / f"{input_path.stem}.asr.mp3"
-    if not full_audio.is_file() or full_audio.stat().st_size == 0:
-        proc = run_proc([
-            "ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(input_path),
-            "-vn", "-ac", "1", "-ar", ASR_SAMPLE_RATE, "-b:a", ASR_AUDIO_BITRATE,
-            str(full_audio),
-        ], capture_output=True, text=True, timeout=3600)
-        if proc.returncode != 0 or not full_audio.is_file() or full_audio.stat().st_size == 0:
-            return ToolResult(
-                text="[ERROR] failed to extract audio for chunked ASR",
-                data={"detail": (proc.stderr or proc.stdout or "").strip()[-800:]},
-            )
-
-    n_chunks = max(1, math.ceil(duration / chunk_seconds))
-    span = duration / n_chunks
-    segments: list[dict[str, Any]] = []
-    interface = None
-    resource_id = None
-    silent_audio = True
-    retry_attempts = 0
-
-    for idx in range(n_chunks):
-        offset = span * idx
-        chunk_dir = work_dir / f"chunk_{idx:02d}"
-        chunk_dir.mkdir(parents=True, exist_ok=True)
-        cache = chunk_dir / "transcript_chunk.json"
-        payload: dict[str, Any] | None = None
-
-        if cache.is_file():
-            try:
-                payload = json.loads(cache.read_text(encoding="utf-8"))
-            except Exception:
-                payload = None
-            if payload is not None and (
-                str(payload.get("language") or "") != str(language or "")
-                or (
-                    "chunk_offset" in payload
-                    and abs(float(payload["chunk_offset"]) - offset) > 0.5
-                )
-                or (
-                    "chunk_span" in payload
-                    and abs(float(payload["chunk_span"]) - span) > 0.5
-                )
-            ):
-                payload = None
-
-        if payload is None:
-            chunk_audio = chunk_dir / "audio.mp3"
-            proc = run_proc([
-                "ffmpeg", "-nostdin", "-y", "-v", "error",
-                "-ss", f"{offset:.3f}",
-                "-t", f"{span + ASR_CHUNK_OVERLAP_SECONDS:.3f}",
-                "-i", str(full_audio),
-                "-c", "copy",
-                str(chunk_audio),
-            ], capture_output=True, text=True, timeout=600)
-            if proc.returncode != 0 or not chunk_audio.is_file() or chunk_audio.stat().st_size == 0:
-                return ToolResult(
-                    text=f"[ERROR] failed to cut ASR chunk {idx + 1}/{n_chunks}",
-                    data={"detail": (proc.stderr or proc.stdout or "").strip()[-800:]},
-                )
-
-            last_err: ToolResult | None = None
-            result, chunk_retry_attempts = run_asr_with_retries(
-                lambda: transcribe_one(chunk_audio, chunk_dir, started_at=time.time()),
-                retries=retries,
-                retry_backoff_seconds=retry_backoff_seconds,
-            )
-            retry_attempts += chunk_retry_attempts
-            if isinstance(result, ToolResult):
-                last_err = result
-            else:
-                payload = result[0]
-                payload["language"] = str(language or "")
-                payload["chunk_offset"] = round(offset, 3)
-                payload["chunk_span"] = round(span, 3)
-                cache.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-
-            if payload is None and last_err is None:
-                last_err = ToolResult(text=f"[ERROR] {backend} chunk failed")
-
-            if payload is None:
-                err = last_err or ToolResult(text=f"[ERROR] {backend} chunk failed")
-                err.data = {
-                    **(err.data or {}),
-                    "chunk": idx + 1,
-                    "n_chunks": n_chunks,
-                    "hint": "chunk results are cached; rerun transcribe to resume",
-                }
-                err.text = f"[ERROR] chunk {idx + 1}/{n_chunks}: " + err.text.removeprefix("[ERROR] ")
-                return err
-
-        interface = interface or payload.get("interface")
-        resource_id = resource_id or payload.get("resource_id")
-        silent_audio = silent_audio and bool(payload.get("silent_audio"))
-        for seg in payload.get("segments", []):
-            text = str(seg.get("text", "")).strip()
-            start = safe_float(seg.get("start"))
-            if not text or start is None:
-                continue
-            if idx > 0 and start < ASR_CHUNK_OVERLAP_SECONDS:
-                continue
-            segments.append({
-                "speaker": f"p{idx}_{seg.get('speaker') or 's?'}",
-                "text": text,
-                "start": round(start + offset, 2),
-                "end": round((safe_float(seg.get("end")) or start) + offset, 2),
-            })
-
-    segments.sort(key=lambda item: item["start"])
-    return {
-        "provider": "cloud_asr",
-        "language": language,
-        "source_media": str(input_path),
-        "asr_audio": str(full_audio),
-        "resource_id": resource_id,
-        "interface": interface,
-        "chunks": n_chunks,
-        "chunk_seconds": chunk_seconds,
-        "speaker_note": (
-            "speaker labels are per-chunk clusters (p{chunk}_{speaker}); "
-            "the same person may carry different labels across chunks"
-        ),
-        "text": " ".join(s["text"] for s in segments),
-        "words": [],
-        "segments": segments,
-        "silent_audio": silent_audio or not segments,
+        }) or None,
         "retry_attempts": retry_attempts,
         "max_retries": retries,
         "elapsed_seconds": round(time.time() - started, 3),
-        "time_unit": "seconds",
-    }, full_audio
+    }
+    if transcript_payload.get("silent_audio"):
+        data["silent_audio"] = True
+    if transcript_payload.get("chunks"):
+        data["chunks"] = transcript_payload["chunks"]
+    return ToolResult(
+        text=f"{PROVIDER_NAME} transcript written: {ctx.virtualize(output_path)}",
+        data=data,
+        artifacts=[str(output_path), str(job_json_path)],
+    )
+
 
 
 def coerce_positive_number(value: object, field: str, default: float) -> float | ToolResult:
