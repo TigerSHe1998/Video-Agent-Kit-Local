@@ -6,6 +6,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# venv 自举必须先于任何第三方 import (mcp SDK 等); 失败时给出可读指引。
+try:
+    from bootstrap import ensure_venv
+
+    ensure_venv()
+except SystemExit:
+    raise
+except Exception as _exc:  # noqa: BLE001 — 自举失败不能是裸 traceback
+    print(
+        f"[ERROR] venv bootstrap failed: {_exc}\n"
+        f"手动修复: python3 \"{Path(__file__).resolve().parent / 'bootstrap.py'}\" --ensure",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
 from server_common import serve
 from ve_tools import (
     basic_ops,
@@ -52,7 +67,7 @@ def main() -> None:
         "timeline_diff": timeline.timeline_diff,
         "detect_shots": shots.detect_shots,
     }
-    serve("video-agent-kit", TOOL_SCHEMAS, impls, ctx)
+    serve("video-agent-kit-local", TOOL_SCHEMAS, impls, ctx)
 
 
 if __name__ == "__main__":

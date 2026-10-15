@@ -11,6 +11,19 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 MCP_ROOT = PLUGIN_ROOT / "mcp"
 sys.path.insert(0, str(MCP_ROOT))
 
+# venv 自举必须先于 ve_tools 的第三方 import; 失败时给出可读指引。
+try:
+    from bootstrap import ensure_venv
+
+    ensure_venv()
+except SystemExit:
+    raise
+except Exception as _exc:  # noqa: BLE001
+    raise SystemExit(
+        f"[ERROR] venv bootstrap failed: {_exc}\n"
+        f"手动修复: python3 \"{MCP_ROOT / 'bootstrap.py'}\" --ensure"
+    )
+
 from ve_tools import (  # noqa: E402
     basic_ops,
     condense,
@@ -56,7 +69,7 @@ TOOLS = {
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run video-agent-kit tools without starting the MCP server.")
+    parser = argparse.ArgumentParser(description="Run video-agent-kit-local tools without starting the MCP server.")
     parser.add_argument("tool", choices=sorted(TOOLS))
     parser.add_argument("--args-json", help="JSON object passed directly to the tool.")
     parser.add_argument("--args-file", help="Path to a JSON file containing tool arguments.")
