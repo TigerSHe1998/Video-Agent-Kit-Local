@@ -9,8 +9,9 @@ venv 放在 ``${CLAUDE_PLUGIN_ROOT}/.venv``，跟着插件的安装/更新/卸�
 requirements.txt 哈希变化时自动增量安装。VE_VENV_DIR 可显式指定其他位置。
 
 自举协议（入口脚本最前面调用 :func:`ensure_venv`）：
-1. ``VE_VENV_ACTIVE=1`` 时视为已在 venv 内（也允许用户预设该变量跳过自举，
-   强行使用当前解释器）；
+1. ``VE_VENV_ACTIVE=1`` 表示已在 venv 解释器内（由 re-exec 设置；用户预设它
+   可跳过 re-exec 直接用当前解释器，但依赖不齐时仍会触发安装与重定向——
+   它不是"用裸环境硬跑"的开关）；
 2. venv 缺失 → 用当前解释器 ``python -m venv`` 创建；存在但 requirements 哈希
    过期 → 只做增量 ``pip install -r``；
 3. ``os.execv`` 进 venv 解释器重跑入口脚本（stdio 句柄继承，MCP 不受影响）；
@@ -44,8 +45,13 @@ REPAIRS_ENV = "VE_VENV_REPAIRS"
 MAX_REPAIRS = 1
 VENV_DIR_ENV = "VE_VENV_DIR"
 
-# 自举后必须可 import 的模块表 —— 与 requirements.txt 一一对应 + scenedetect。
-REQUIRED_MODULES = ("mcp", "cv2", "numpy", "PIL", "jieba", "fontTools", "scenedetect")
+# 自举后必须可 import 的模块表 —— requirements.txt 的直接依赖 + scenedetect 的
+# 三个纯 py 依赖 (其 CLI 入口要 click; --no-deps 安装不带它们, 需显式列出)。
+REQUIRED_MODULES = (
+    "mcp", "cv2", "numpy", "PIL", "jieba", "fontTools", "scenedetect",
+    "click", "platformdirs", "tqdm",
+)
+STALE_LOCK_SECONDS = 1800.0
 
 
 def venv_dir() -> Path:
@@ -82,8 +88,11 @@ def _pip_index() -> str:
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    # stdin=DEVNULL: 子进程绝不能抢 MCP stdio 管道里的字节 (同 ffproc 的教训)
-    return subprocess.run(cmd, stdin=subprocess.DEVNULL)
+    # stdin=DEVNULL: 子进程绝不能抢 MCP stdio 管道里的字节 (同 ffproc 的教训)。
+    # stdout 重定向到 stderr: pip 的进度输出绝不能写进 MCP 的 JSON-RPC 管道
+    # (宿主把本进程 stdout 当协议流), stderr 是安全通道。
+    return subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                          stdout=sys.stderr, stderr=sys.stderr)
 
 
 def _stamp_ok(vdir: Path) -> bool:
@@ -95,7 +104,7 @@ def _stamp_ok(vdir: Path) -> bool:
 
 
 def install_or_create(vdir: Path) -> None:
-    """创建 venv（缺失时）并增量安装依赖。公开给 env_doctor --fix 复用。"""
+    """创建 venv（缺失时）并增量安装依赖。`bootstrap.py --ensure` 与冷启动共用此入口。"""
     vdir.mkdir(parents=True, exist_ok=True)
     lock = vdir / BUILD_LOCK
     locked = False
@@ -141,23 +150,43 @@ def install_or_create(vdir: Path) -> None:
 
 
 def _wait_for_build(vdir: Path) -> None:
-    """并发入口 (CLI 与 server 同时冷启动): 等持锁方建完。"""
+    """并发入口 (CLI 与 server 同时冷启动): 等持锁方建完。
+
+    锁文件 mtime 超过 STALE_LOCK_SECONDS 视为持锁进程已崩溃, 强删后由
+    调用方重新走 install_or_create (其 O_CREAT|O_EXCL 抢锁会自然接管)。
+    """
     lock = vdir / BUILD_LOCK
     deadline = time.time() + BUILD_WAIT_TIMEOUT_S
     while time.time() < deadline:
         if not lock.exists() and _stamp_ok(vdir):
+            return
+        try:
+            if lock.exists() and time.time() - lock.stat().st_mtime > STALE_LOCK_SECONDS:
+                lock.unlink(missing_ok=True)
+                return
+        except OSError:
             return
         time.sleep(2.0)
     raise RuntimeError(f"等待并行 venv 构建超时 ({BUILD_WAIT_TIMEOUT_S:.0f}s): {vdir}")
 
 
 def _reexec() -> None:
+    """进 venv 解释器重跑入口脚本 (仅常规 ``python server.py args`` 形态)。
+
+    ``python -c "..."`` / ``python -`` / ``python -m mod`` 形态下 sys.argv[0]
+    是 "-c"/"-"/模块名, execv 无法原样重放 —— 这些场景的调用方 (import
+    bootstrap 的内联/工具代码) 自己管理环境, 不做 re-exec, 直接返回让调用
+    方在当前解释器里继续 (依赖若缺, 由 ensure_venv 的 VE_VENV_ACTIVE 分支
+    或调用方显式 --ensure 处理)。
+    """
+    argv0 = sys.argv[0]
+    if not argv0 or argv0.startswith("-") or not Path(argv0).is_file():
+        return
     py = venv_python(venv_dir())
     if not py.is_file():
         raise RuntimeError(f"venv 解释器不存在: {py}")
-    script = Path(sys.argv[0]).resolve()
     os.environ[ACTIVE_ENV] = "1"
-    os.execv(str(py), [str(py), str(script), *sys.argv[1:]])
+    os.execv(str(py), [str(py), str(Path(argv0).resolve()), *sys.argv[1:]])
 
 
 def _repairs() -> int:
@@ -169,6 +198,11 @@ def _repairs() -> int:
 
 def ensure_venv() -> None:
     """入口脚本第一行调用: 必要时建 venv 并 re-exec 进去, 幂等。"""
+    if sys.version_info < (3, 10):
+        raise RuntimeError(
+            f"需要 Python 3.10+ (当前 {sys.version.split()[0]}); venv 由当前解释器"
+            "创建, 换一个 3.10+ 的 python 再启动本插件"
+        )
     if os.environ.get(ACTIVE_ENV) == "1":
         # 已在目标解释器里: 只做 import 兜底 (戳文件在但依赖坏了), 最多自愈一次
         if _imports_ok():
@@ -200,7 +234,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="video-agent-kit-local venv bootstrap")
     ap.add_argument("--ensure", action="store_true",
-                    help="create/refresh the venv without re-exec (for env_doctor --fix)")
+                    help="create/refresh the venv without re-exec")
     args = ap.parse_args()
     vdir = venv_dir()
     if args.ensure:

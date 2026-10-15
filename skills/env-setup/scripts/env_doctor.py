@@ -94,7 +94,7 @@ class Check:
     probe: Callable[[], tuple[bool, str]]  # → (ok, 细节一行)
     need: str = ""                         # 硬要求一行 ("装什么、什么版本线")
     fix: list[str] = field(default_factory=list)   # 本平台示例命令 (可空)
-    cheap: bool = False                   # 毫秒级、不碰网络 → hook 可跑
+    cheap: bool = False                   # 毫秒级、不碰网络 → /env-check 可快速重跑
     auto: bool = False                    # --fix 允许自动执行 (只用户态、幂等)
     slow: bool = False                    # 修复耗时以分钟计, 需要长 timeout
     needs: str = ""                       # 前置检查项 id; 前置失败则本项 skip
@@ -114,6 +114,76 @@ class Result:
 def probe_py_version() -> tuple[bool, str]:
     v = sys.version_info
     return v >= (3, 10), f"{v.major}.{v.minor}.{v.micro} at {PY}"
+
+
+# ── 插件 venv (依赖的真正归宿) ────────────────────────────────────────────────
+# 依赖由 mcp/bootstrap.py 管理: venv 在插件目录内, 首次调用自动创建。
+# 体检必须探测 venv, 而不是跑 doctor 的解释器 —— 两者经常不是同一个。
+BOOTSTRAP = PLUGIN_ROOT / "mcp" / "bootstrap.py"
+VENV_DIR = PLUGIN_ROOT / ".venv"
+VENV_PY = VENV_DIR / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+
+
+def _bootstrap_ensure_cmd() -> str:
+    py = f'"{PY}"' if " " in PY else PY
+    return f"{py} \"{BOOTSTRAP}\" --ensure"
+
+
+def _requirements_stamp() -> str | None:
+    """与 mcp/bootstrap.py 的 requirements_stamp 同算法: sha256 前 16 位。"""
+    import hashlib
+
+    try:
+        req = REQUIREMENTS.read_text(encoding="utf-8") if REQUIREMENTS.is_file() else ""
+    except OSError:
+        return None
+    payload = "\x00".join(
+        [req, *("scenedetect>=0.6",),
+         f"py{sys.version_info.major}.{sys.version_info.minor}"],
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def venv_state() -> tuple[str, str]:
+    """→ (state, detail). state: missing | healthy | stale | broken。
+    healthy = 解释器在 + 戳与 requirements 匹配; stale = 戳不匹配(增量重装即可);
+    broken = 解释器在但戳缺失(半装)。missing 时首次调用会自动建, 不是缺口。"""
+    if not VENV_PY.is_file():
+        return "missing", f"未创建 (首次调用 MCP/CLI 时自动构建): {VENV_DIR}"
+    stamp = VENV_DIR / ".vak-stamp"
+    if not stamp.is_file():
+        return "broken", f"{VENV_DIR} 不完整 (缺戳文件); --ensure 可修复"
+    expect = _requirements_stamp()
+    if expect is None:
+        return "broken", "读 requirements.txt 失败"
+    if stamp.read_text(encoding="utf-8").strip() != expect:
+        return "stale", "requirements 已变化, 下次调用自动增量重装 (或 --ensure 立即)"
+    return "healthy", f"{VENV_DIR}"
+
+
+def probe_venv() -> tuple[bool, str]:
+    state, detail = venv_state()
+    # missing/healthy/stale 都算 ok (stale 会在下次调用自动增量装); broken 需要修
+    return state != "broken", f"{state}: {detail}"
+
+
+def _venv_probe(code: str) -> tuple[bool, str]:
+    """在插件 venv 解释器里跑一段探测代码 (单行, 分号分隔), 返回 (ok, detail)。
+    venv missing 时不报缺 (自动构建); broken 才是缺口。"""
+    state, detail = venv_state()
+    if state == "missing":
+        return True, f"venv 未创建 (首次调用自动构建)"
+    if state == "broken":
+        return False, f"venv 损坏: {detail}"
+    import subprocess as _sp
+
+    r = _sp.run([str(VENV_PY), "-c", code], capture_output=True, text=True,
+                timeout=60, stdin=_sp.DEVNULL)
+    out = r.stdout.strip()
+    err = (r.stderr or r.stdout or "").strip()
+    if r.returncode != 0:
+        return False, (err.splitlines()[-1][:160] if err else "探测失败")
+    return (not out.startswith("MISSING")), out or "已装"
 
 
 def probe_pip() -> tuple[bool, str]:
@@ -142,12 +212,12 @@ def probe_pip() -> tuple[bool, str]:
 
 
 def probe_module(mod: str) -> Callable[[], tuple[bool, str]]:
+    """在插件 venv 里探测 (依赖的真正归宿); venv missing 视为待自动构建。"""
     def _p() -> tuple[bool, str]:
-        try:
-            spec = importlib.util.find_spec(mod)
-        except Exception as e:                       # 包坏了 (半装/依赖缺) 也算缺
-            return False, f"find_spec 报错: {e}"
-        return bool(spec), (spec.origin or "已装") if spec else "未安装"
+        return _venv_probe(
+            "import importlib.util as u; "
+            f"print('MISSING' if u.find_spec({mod!r}) is None else '已装')"
+        )
     return _p
 
 
@@ -162,29 +232,29 @@ def _dist_version(name: str) -> str | None:
 
 def probe_mcp() -> tuple[bool, str]:
     """mcp 1.x —— server_common.py 用的是 1.x 的 Server.list_tools/call_tool 装饰器
-    API, 2.x 改了这套接口, "装了但是大版本不对"会让所有工具消失而不是报错。"""
-    if importlib.util.find_spec("mcp") is None:
-        return False, "未安装"
-    ver = _dist_version("mcp")
-    if ver is None:
-        return True, "已装 (版本未知)"
-    try:
-        major = int(ver.split(".")[0])
-    except ValueError:
-        return True, f"已装 {ver} (版本号无法解析)"
-    return major == 1, f"{ver}" + ("" if major == 1 else " [!] 需要 1.x (2.x 改了 Server API)")
+    API, 2.x 改了这套接口, "装了但是大版本不对"会让所有工具消失而不是报错。
+    在插件 venv 里探测 (依赖的真正归宿); venv missing 视为待自动构建。"""
+    return _venv_probe(
+        "from importlib.metadata import version; "
+        "v = version('mcp'); "
+        "m = int(v.split('.')[0]); "
+        "print(v if m == 1 else f'{v} [!] 需要 1.x (2.x 改了 Server API)')"
+    )
 
 
 def probe_cv2_conflict() -> tuple[bool, str]:
     """opencv-python(GUI) 与 opencv-python-headless 混装 —— 两个包提供同一个 cv2
     目录, pip 不认为它们冲突, 装第二个会覆盖第一个的文件, 结果是 import cv2 成功
-    但某些符号缺失/崩在 libGL 上。requirements.txt 只要 headless。"""
-    gui, headless = _dist_version("opencv-python"), _dist_version("opencv-python-headless")
-    if gui and headless:
-        return False, f"同时装了 opencv-python {gui} 和 opencv-python-headless {headless}"
-    if gui and not headless:
-        return True, f"只有 GUI 版 opencv-python {gui} [!] 无头机器上可能缺 libGL; 建议换 headless"
-    return True, f"opencv-python-headless {headless}" if headless else "cv2 来源非 pip (自建/conda), 未见冲突"
+    但某些符号缺失/崩在 libGL 上。requirements.txt 只要 headless。
+    在插件 venv 里探测; venv missing 视为待自动构建。"""
+    return _venv_probe(
+        "import importlib.metadata as m; "
+        "names = {d.metadata['Name'] for d in m.distributions()}; "
+        "print('MISSING: venv 里同时装了 opencv-python (GUI 版) 和 headless' "
+        "if ('opencv-python' in names and 'opencv-python-headless' in names) else "
+        "('仅 headless, 干净' if 'opencv-python-headless' in names else "
+        "'cv2 未装 (见 py-cv2 项)'))"
+    )
 
 
 def probe_bins(*bins: str) -> Callable[[], tuple[bool, str]]:
@@ -230,7 +300,7 @@ def probe_ffmpeg_filters() -> tuple[bool, str]:
     if not text:
         return False, "ffmpeg -filters 无输出"
     want = {"subtitles": "字幕烧录 (libass)", "ass": "ASS 字幕烧录 (libass)",
-            "drawtext": "标题卡/比分角标 (libfreetype)", "xfade": "段间溶解"}
+            "drawtext": "标题卡/文字轨 (libfreetype)", "xfade": "段间溶解"}
     miss = [f"{k}({v})" for k, v in want.items() if f" {k} " not in text]
     if miss:
         return False, "缺滤镜: " + ", ".join(miss)
@@ -251,13 +321,32 @@ def probe_font() -> tuple[bool, str]:
 
     这里不查"某个目录下有没有某个文件", 而是直接调 ve_tools.fonts, 因为字幕
     分行是拿真字体量出来的, 体检和渲染必须看同一个结果。cmap 真覆盖也要查:
-    fc-match 对着没装的中文族会返回 DejaVu, 烧出来是豆腐块但 ffmpeg 退出码 0。
+    fc-match 对着没装的中文族会返回 DejaVu, 烧出来是豆腐块而 ffmpeg 退出码 0。
+    在插件 venv 解释器里跑 (fontTools 在 venv 里; doctor 自己的解释器没有)。
     """
+    state, detail = venv_state()
+    if state == "missing":
+        return True, "venv 未创建, 字体体检推迟到首次调用后 (自动构建)"
+    if state == "broken":
+        return False, f"venv 损坏, 无法体检字体: {detail}"
+    import subprocess as _sp
+
+    code = (
+        "import sys, json; sys.path.insert(0, r'" + str(PLUGIN_ROOT / "mcp").replace("'", "\\'") + "'); "
+        "from ve_tools import fonts; "
+        "print(json.dumps(fonts.diagnose(), ensure_ascii=False))"
+    )
+    r = _sp.run([str(VENV_PY), "-c", code], capture_output=True, text=True,
+                timeout=60, stdin=_sp.DEVNULL)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip()
+        return False, f"ve_tools.fonts 探测失败: {err.splitlines()[-1][:160] if err else '未知错误'}"
+    import json as _json
+
     try:
-        fonts = _load_kit_module("fonts")
-    except Exception as e:
-        return False, f"ve_tools.fonts 不可用: {type(e).__name__}: {e}"
-    d = fonts.diagnose()
+        d = _json.loads(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return False, f"ve_tools.fonts 返回不可解析: {r.stdout.strip()[:120]}"
     if not d["regular"]:
         dirs = ", ".join(d["existing_dirs"]) or "(以上目录都不存在)"
         return False, f"未找到任何中文字体; 已搜: {dirs}"
@@ -267,22 +356,23 @@ def probe_font() -> tuple[bool, str]:
     if covered is False:
         return False, f"{d['regular']}{tail}"
     if covered is None:
-        # fontTools 还没装 → 覆盖度未知, 但文件在, 不当缺口 (py-fontTools 那项会报)
+        # venv 里 fontTools 缺失 → 覆盖度未知, 但文件在, 不当缺口 (py-fontTools 那项会报)
         return True, f"{d['regular']}{tail} (覆盖度未验证: 缺 fontTools)"
     return True, f"{d['regular']}{tail}"
 
 
 def probe_asr() -> tuple[bool, str]:
-    """本地转录 CLI (Moss Transcribe WebUI)。CLI 在 PATH 或 VE_TRANSCRIBE_CMD 即可用;
-    无服务时它自启, 不需要预检服务端口。"""
-    cmd = (os.environ.get("VE_TRANSCRIBE_CMD") or "").strip() or "transcribe"
-    found = cmd if Path(cmd).is_file() else shutil.which(cmd)
-    if not found:
-        return False, ("transcribe CLI 未找到 — Moss Transcribe WebUI 的 cli/ 需加入 PATH, "
-                       "或设 VE_TRANSCRIBE_CMD 指向 transcribe 可执行文件")
-    host = (os.environ.get("VE_TRANSCRIBE_HOST") or "127.0.0.1").strip()
-    port = (os.environ.get("VE_TRANSCRIBE_PORT") or "8390").strip()
-    return True, f"{found} (服务 {host}:{port}, 无服务时自动拉起)"
+    """本地转录 CLI (Moss Transcribe WebUI)。走 _load_kit_module("local_asr") 直接调
+    运行时的解析逻辑 (含 .env 层), 体检与实际调用必须看同一个结果; 无服务时 CLI
+    自启, 不预检服务端口。"""
+    try:
+        local_asr = _load_kit_module("local_asr")
+    except Exception as e:
+        return False, f"local_asr 模块不可用: {type(e).__name__}: {e}"
+    status = local_asr.local_asr_status()
+    if not status.get("available"):
+        return False, "; ".join(status.get("reasons") or ["未找到"])
+    return True, f"{status.get('command')} (服务 {status.get('host')}:{status.get('port')}, 无服务时自动拉起)"
 
 
 def probe_disk() -> tuple[bool, str]:
@@ -307,45 +397,44 @@ PY_MODULES = [
 CHECKS: list[Check] = [
     Check("py", "python3 ≥ 3.10", "MCP server 用了 3.10+ 运行时语法 (X | Y 类型别名)",
           probe_py_version,
-          need="Python 3.10 或更高 (宿主拉起 MCP server 用的就是这个解释器)",
+          need="Python 3.10 或更高 (bootstrap 用它创建插件 .venv, 语法约束仍适用)",
           fix=["# 换一个 3.10+ 解释器, 例如 conda create -n va python=3.12"],
           cheap=True),
-    Check("py-pip", "python 包管理: pip (非 PEP 668 外部托管)",
-          "所有 auto 修复都靠 pip 装 — pip 缺失或被 externally-managed 拦住时, 一个包都装不上",
-          probe_pip,
-          need="pip 可用, 且不是 externally-managed 环境 (系统 Python 常被 PEP 668 锁; 用 venv/pipx 最稳)",
-          fix=[f"# 推荐: 建虚拟环境再装, 不撞 PEP 668:",
-               f"#   {PYQ} -m venv .venv && .venv/bin/python -m pip install -i {PIP_INDEX} -r {REQUIREMENTS}",
-               f"# 或对当前解释器强行装 (仅当它是你专用、可被改的环境):",
-               f"#   {PYQ} -m pip install -i {PIP_INDEX} --break-system-packages -r {REQUIREMENTS}",
-               "# pip 本身缺失时先确保: python -m ensurepip --upgrade"],
+    Check("venv", "插件 venv (依赖归宿)", "python 依赖装在插件目录内 .venv — 首次调用 MCP/CLI 时自动构建, 不碰全局环境",
+          probe_venv,
+          need="missing/healthy/stale 均为正常态 (自动构建/自动增量); broken 才需要修",
+          fix=[f"# 手动 (预) 构建 / 修复: {_bootstrap_ensure_cmd()}",
+               f"# venv 位置: {VENV_DIR} (随插件安装/更新/卸载走; VE_VENV_DIR 可改)"],
           cheap=True, needs="py"),
-    Check("py-mcp", "python 包: mcp (1.x)", "MCP server 本体 — 缺则所有剪辑工具都不存在",
+    Check("py-pip", "python 包管理: pip (非 PEP 668 外部托管)",
+          "bootstrap 建 venv/装依赖都靠它 — pip 缺失或被 externally-managed 拦住时, venv 构建会失败",
+          probe_pip,
+          need="pip 可用, 且不是 externally-managed 环境 (系统 Python 常被 PEP 668 锁)",
+          fix=["# pip 本身缺失时先确保: python -m ensurepip --upgrade",
+               "# PEP 668 只锁系统解释器; bootstrap 建的 venv 不受影响, 通常无需处理"],
+          cheap=True, needs="py"),
+    Check("py-mcp", "python 包: mcp (1.x)", "MCP server 本体 — 缺则所有剪辑工具都不存在 (装进插件 venv)",
           probe_mcp,
-          need="pip 包 mcp>=1.0.0,<2.0.0 (装进上面那个解释器, 不是系统里随便哪个 python)",
-          fix=[pip_install("mcp>=1.0.0,<2.0.0"), *PIP_MIRROR_NOTES],
-          cheap=True, auto=True, slow=True, needs="py-pip"),
+          need="pip 包 mcp>=1.0.0,<2.0.0 (装进插件 .venv; 缺失时首跑 bootstrap 会自动装)",
+          fix=[f"# 自动安装 (bootstrap 在插件 venv 内装齐全部依赖): {_bootstrap_ensure_cmd()}",
+               "# 换镜像: 设 VE_PIP_INDEX 后重跑"],
+          cheap=True, auto=True, slow=True, needs="venv"),
     *[Check(f"py-{mod}", f"python 包: {mod}", why, probe_module(mod),
-            need=f"pip 包 {pkg} (装进上面那个解释器)",
-            fix=[pip_install(pkg), *PIP_MIRROR_NOTES],
-            cheap=True, auto=True, slow=True, needs="py-pip")
+            need=f"pip 包 {pkg} (装进插件 .venv; 由 bootstrap 统一管理)",
+            fix=[f"# 统一修复入口 (在插件 venv 内装齐全部依赖): {_bootstrap_ensure_cmd()}"],
+            cheap=True, auto=True, slow=True, needs="venv")
       for mod, pkg, why in PY_MODULES],
-    Check("py-scenedetect", "python 包: scenedetect", "recap 流水线的镜头边界检测 (shots)",
+    Check("py-scenedetect", "python 包: scenedetect", "`detect_shots` 的镜头边界检测 (shots)",
           probe_module("scenedetect"),
-          need="pip 包 scenedetect>=0.6, **必须 --no-deps 装** + 它的三个纯 python 依赖",
-          fix=[pip_install("click>=8.0", "platformdirs>=3.0", "tqdm>=4.0"),
-               pip_install("scenedetect>=0.6", no_deps=True),
-               "# --no-deps 不是优化而是硬要求: scenedetect 声明依赖 opencv-python(GUI 版),",
-               "#   直装会把 GUI 版盖到 opencv-python-headless 的 cv2 上, 两个包一起坏。",
-               *PIP_MIRROR_NOTES],
-          cheap=True, auto=True, slow=True, needs="py-pip"),
-    Check("cv2-clean", "cv2 无 GUI/headless 混装", "混装会让 cv2 半坏: import 成功但抽帧崩在 libGL",
+          need="pip 包 scenedetect>=0.6, **必须 --no-deps 装** + 它的三个纯 python 依赖 (bootstrap 已内置此逻辑)",
+          fix=[f"# 统一修复入口 (bootstrap 处理 --no-deps 与三个纯依赖): {_bootstrap_ensure_cmd()}"],
+          cheap=True, auto=True, slow=True, needs="venv"),
+    Check("cv2-clean", "cv2 无 GUI/headless 混装", "混装会让 cv2 半坏: import 成功但抽帧崩在 libGL (在插件 venv 里检查)",
           probe_cv2_conflict,
-          need="只装 opencv-python-headless 一个 (不要同时装 opencv-python)",
-          # 卸载是破坏性动作 (可能是别的项目装的), 不自动执行。
-          fix=[f"{PYQ} -m pip uninstall -y opencv-python   # 卸 GUI 版, 保留 headless",
-               f"{PYQ} -m pip install --force-reinstall -i {PIP_INDEX} "
-               '"opencv-python-headless>=4.8.0,<5.0.0"   # 再补回被覆盖的文件'],
+          need="插件 venv 里只装 opencv-python-headless 一个 (不要同时装 opencv-python)",
+          # venv 是插件私有的, 修它不动用户全局环境
+          fix=[f"# 重建干净 venv (推荐, 一并修复依赖): {_bootstrap_ensure_cmd()}",
+               "# 或手动: 删除插件目录下 .venv 后重跑上面命令"],
           cheap=True, needs="py-cv2"),
     Check("ffmpeg", "ffmpeg + ffprobe", "剪切 / 渲染 / 抽帧 / 时长探测 —— 缺了整条流水线都起不来",
           probe_bins("ffmpeg", "ffprobe"),
@@ -388,7 +477,7 @@ CHECKS: list[Check] = [
               ) + [f"# conda 路线 (跨平台, 清华镜像): conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg",
                    "# 注意: 部分极简/静态构建就是不带 libass, 换构建比补参数省事"],
           cheap=True, needs="ffmpeg"),
-    Check("font-cjk", "中文字体 (真能写中文的)", "字幕烧录 / 标题卡 / 比分角标 / contact sheet 标签",
+    Check("font-cjk", "中文字体 (真能写中文的)", "字幕烧录 / 标题卡 / contact sheet 标签",
           probe_font,
           need="一个覆盖中日韩字形的字体文件; 首选 Noto Sans CJK, "
                "系统自带的雅黑/苹方/AR PL UMing 也算 (mac/Win 一般已自带)",
@@ -418,7 +507,7 @@ CHECKS: list[Check] = [
           soft=True),
     Check("disk", f"项目盘可用空间 ≥ {MIN_FREE_GB}G", "预览/成片 mp4 + 抽帧图落在项目目录",
           probe_disk,
-          need=f"{PROJECT_DIR} 所在盘 ≥ {MIN_FREE_GB}G 空闲 (长视频 recap 要更多)",
+          need=f"{PROJECT_DIR} 所在盘 ≥ {MIN_FREE_GB}G 空闲 (长视频/长素材要多留)",
           fix=["# 清 out/ 与 .video_agent/ 下的旧产物, 或换一个盘上的工作目录"],
           cheap=True, soft=True),
 ]
@@ -484,11 +573,7 @@ def render(results: list[Result]) -> str:
             lines.append(f"       {cmd}")
     if any(r.check.auto for r in bad if r.status == "missing"):
         lines.append(f"[env] 自动项可一把过: python3 {Path(__file__).name} --fix "
-                     "(只跑上面标 自动可装 的命令)")
-        if REQUIREMENTS.is_file():
-            lines.append(f"[env] 也可以照 requirements.txt 一次装齐 pip 依赖: "
-                         f"{PYQ} -m pip install -i {PIP_INDEX} -r {REQUIREMENTS} "
-                         f"&& {PYQ} -m pip install -i {PIP_INDEX} --no-deps \"scenedetect>=0.6\"")
+                     "(自动项统一走 bootstrap, 依赖装进插件 .venv, 不碰全局环境)")
     return "\n".join(lines)
 
 

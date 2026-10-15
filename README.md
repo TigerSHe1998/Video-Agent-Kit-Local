@@ -27,9 +27,11 @@
 
 `schemas/video_observation.schema.json` 对应工具真实落盘的 observation package，即 `video_ingest` / `video_watch_segment` 生成的帧清单、sheet 清单、媒体元数据、抽帧参数和匹配转录。模型读图后的主观摘要、候选片段和风险判断应写入 `out/report.md` 或后续独立的 review 文件，不写回这个工具产物 schema。
 
+除上文详列的 9 个核心工具外，插件还提供 14 个确定性工具，主要服务 `video-speech-workflows`：`analyze_media`（场景/黑场/静音分析）、`subtitle_scout` / `subtitle_build` / `subtitle_render` / `subtitle_qc`（字幕四件套）、`condense_index` / `condense_plan` / `condense_render` / `condense_qc`（口播压缩四件套）、`diarize_audit` / `diarize_relabel`（说话人归属修复）、`video_read_frames`（原分辨率读帧）、`detect_shots`（镜头边界检测，缓存感知）。各自契约见对应 skill 文档。
+
 ## 插件使用
 
-把本目录作为 Claude plugin 使用时，`.mcp.json` 会启动 `mcp/video_edit_server.py`。命令入口在：
+把本目录作为 Claude plugin 使用时，`.mcp.json` 会启动 `mcp/video_edit_server.py`（清单 `command` 为 `python3`，要求宿主 PATH 上有 3.10+ 的 Python）。注意：**安装后首次调用 MCP 工具时**会自动构建插件内 `.venv`（下载依赖约 1~2 分钟，取决于网速），宿主对该次调用的等待可能明显长于平时；之后就是秒级热启动。命令入口在：
 
 ```text
 commands/video-edit.md
@@ -46,13 +48,23 @@ skills/video-speech-workflows/SKILL.md
 `video-speech-workflows` 处理单源语音压缩和字幕；`env-setup` 只管环境（体检 + 装依赖，
 跨 macOS / Windows / Linux），不碰剪辑任务。
 
-首次使用前装环境（推荐走体检脚本，它跨 macOS / Windows / Linux 且默认用国内镜像）：
+### Python 依赖（自动，无需手工安装）
+
+Python 依赖由 `mcp/bootstrap.py` 自动管理：**首次调用任何 MCP 工具或 CLI 时**，自动在插件目录内创建 `.venv` 并安装全部依赖（默认清华镜像，`VE_PIP_INDEX` 可换）；`requirements.txt` 变化时下次调用自动增量重装。`.venv` 随插件的安装/更新/卸载走——更新后首次调用会重建（预期行为），卸载时随插件目录一起删除，不碰全局 Python 环境。想预先构建（避免首次调用的等待）：
+
+```bash
+python3 "<插件根>/mcp/bootstrap.py" --ensure
+```
+
+### 系统级环境（ffmpeg / 字体 / 转录 CLI）
+
+系统级依赖用体检脚本排查（跨 macOS / Windows / Linux）：
 
 ```bash
 # 只体检：逐项报"要什么 / 缺了挂哪个能力 / 本平台怎么装"
-python3 video-agent-kit/skills/env-setup/scripts/env_doctor.py
-# 体检 + 自动装可自动装的 pip 包（清华源）
-python3 video-agent-kit/skills/env-setup/scripts/env_doctor.py --fix
+python3 "<插件根>/skills/env-setup/scripts/env_doctor.py"
+# 体检 + 自动修可自动修的项（pip 依赖统一走 bootstrap 装进插件 .venv）
+python3 "<插件根>/skills/env-setup/scripts/env_doctor.py" --fix
 ```
 
 会话里也可以直接用 `/env-check`（对应 `env-setup` skill）。体检结论落在
@@ -61,15 +73,7 @@ python3 video-agent-kit/skills/env-setup/scripts/env_doctor.py --fix
 它查的不止"包在不在"：ffmpeg 有没有带 `libx264` / `aac` / `libmp3lame` 与
 `libass`（缺了字幕烧录必挂，但只在渲染最后一步才炸）、本机中文字体的 cmap 是不是
 真覆盖中文（`fc-match` 对着没装的中文族会返回 DejaVu，烧出来是豆腐块而 ffmpeg
-退出码 0）、以及本地转录 CLI（`transcribe`）在不在 PATH 上。
-
-也可以手工只装 Python 依赖（注意 `scenedetect` 必须 `--no-deps`，否则会把 GUI 版
-opencv 盖到 `opencv-python-headless` 的 `cv2` 上，两个包一起坏）：
-
-```bash
-python3 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r video-agent-kit/requirements.txt
-python3 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-deps "scenedetect>=0.6"
-```
+退出码 0）、以及本地转录 CLI（`transcribe`）在不在 PATH 上。Python 依赖的检查项探测的是插件 `.venv` 的实际状态，不是跑体检的那个解释器。
 
 字体不在标准目录时不用改代码，把目录塞给 `VE_FONT_DIRS`（多个目录用
 `os.pathsep` 分隔）即可；查找顺序见 `mcp/ve_tools/fonts.py`：`VE_FONT_DIRS` →
@@ -126,17 +130,17 @@ video-edit-agent classify
 CLI 和 MCP 共用同一套实现：
 
 ```bash
-python video-agent-kit/cli/video_agent_tool.py inspect_media --input_path input.mp4 --pretty
-python video-agent-kit/cli/video_agent_tool.py transcribe --input_path input.mp4 --language zh --pretty
-python video-agent-kit/cli/video_agent_tool.py video_ingest --args-file video-agent-kit/examples/video_ingest_args.json --pretty
-python video-agent-kit/cli/video_agent_tool.py video_watch_segment --video_path input.mp4 --start_time 12 --end_time 16 --fps 6 --pretty
-python video-agent-kit/cli/video_agent_tool.py video_basic_operation --operation trim --input_path input.mp4 --start_time 3 --end_time 8 --output_path out/trim.mp4 --pretty
-python video-agent-kit/cli/video_agent_tool.py video_basic_operation --operation splice --args-json '{"clips":[{"source":"input.mp4","start":0,"end":3},{"source":"input.mp4","start":8,"end":12}],"output_path":"out/splice.mp4"}' --pretty
-python video-agent-kit/cli/video_agent_tool.py validate_timeline --timeline_path out/timeline.json --pretty
-python video-agent-kit/cli/video_agent_tool.py render_preview --timeline_path out/timeline.json --output_path out/preview.mp4 --pretty
+python "<插件根>/cli/video_agent_tool.py" inspect_media --input_path input.mp4 --pretty
+python "<插件根>/cli/video_agent_tool.py" transcribe --input_path input.mp4 --language zh --pretty
+python "<插件根>/cli/video_agent_tool.py" video_ingest --args-file "<插件根>/examples/video_ingest_args.json" --pretty
+python "<插件根>/cli/video_agent_tool.py" video_watch_segment --video_path input.mp4 --start_time 12 --end_time 16 --fps 6 --pretty
+python "<插件根>/cli/video_agent_tool.py" video_basic_operation --operation trim --input_path input.mp4 --start_time 3 --end_time 8 --output_path out/trim.mp4 --pretty
+python "<插件根>/cli/video_agent_tool.py" video_basic_operation --operation splice --args-json '{"clips":[{"source":"input.mp4","start":0,"end":3},{"source":"input.mp4","start":8,"end":12}],"output_path":"out/splice.mp4"}' --pretty
+python "<插件根>/cli/video_agent_tool.py" validate_timeline --timeline_path out/timeline.json --pretty
+python "<插件根>/cli/video_agent_tool.py" render_preview --timeline_path out/timeline.json --output_path out/preview.mp4 --pretty
 # 可选：显式指定预览画布，适合横竖屏或不同分辨率素材混剪
-python video-agent-kit/cli/video_agent_tool.py render_preview --timeline_path out/timeline.json --output_width 1080 --output_height 1920 --pretty
-python video-agent-kit/cli/video_agent_tool.py qc_preview --video_path out/preview.mp4 --timeline_path out/timeline.json --pretty
+python "<插件根>/cli/video_agent_tool.py" render_preview --timeline_path out/timeline.json --output_width 1080 --output_height 1920 --pretty
+python "<插件根>/cli/video_agent_tool.py" qc_preview --video_path out/preview.mp4 --timeline_path out/timeline.json --pretty
 ```
 
 CLI 的 `--args-json` / `--args-file` 必须是合法 JSON，且顶层必须是 JSON object；非法 JSON 或数组 / 字符串等非对象参数会在入口处直接报错。`--key value` 简写会自动解析 JSON object / array 字符串，所以可以直接传结构化 patch，例如 `--patch '{"add_clips":[...]}'`；复杂参数仍推荐使用 `--args-file`。

@@ -95,41 +95,7 @@ def clean_env(*names: str) -> str | None:
     return None
 
 
-def check_endpoint(env_var: str, *fallback_vars: str) -> tuple[str | None, str | None]:
-    """Resolve the legacy direct-HTTP speech endpoint. Returns ``(url, error)``.
 
-    **Process environment only** — deliberately not ``clean_env``. A project-local
-    ``.env`` is untrusted input: if it could supply this value, any repository
-    could redirect an authenticated speech call (API key attached) to a host of
-    its choosing. The operator injects the endpoint when spawning the server, so
-    an absent value is an absent capability, not something to guess a default for.
-
-    There is no built-in default: the direct-HTTP backend is a legacy escape
-    hatch, and the kit does not name or presume any particular speech vendor.
-    """
-    from urllib.parse import urlsplit
-
-    url = (_raw_env(env_var, *fallback_vars) or "").rstrip("/")
-    if not url:
-        return None, (
-            f"{env_var} is not set in the process environment; the direct-HTTP "
-            "compatibility backend has no default endpoint"
-        )
-    try:
-        parts = urlsplit(url)
-    except Exception as exc:  # noqa: BLE001
-        return None, f"{env_var}: unparseable endpoint {url!r} ({exc})"
-    scheme = (parts.scheme or "").lower()
-    host = (parts.hostname or "").lower()
-    if parts.username or parts.password:
-        return None, f"{env_var}: endpoint must not embed credentials"
-    is_loopback = host in ("127.0.0.1", "::1", "localhost")
-    if scheme == "https" or (scheme == "http" and is_loopback):
-        return url, None
-    return None, (
-        f"{env_var}: endpoint {url!r} must be https (or http on loopback for "
-        "local development); credentials are not sent over plaintext"
-    )
 
 
 class RunContext:

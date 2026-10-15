@@ -11,7 +11,7 @@ from typing import Any
 
 from .result import ToolResult
 from .run_context import RunContext, clean_env
-from .local_asr import local_asr_status, local_asr_transcribe_payload
+from .local_asr import local_asr_transcribe_payload
 from .transcript import read_transcript_text
 
 ASR_TIMEOUT_SECONDS = 3600.0
@@ -89,48 +89,35 @@ def run_asr_with_retries(call: Any, *, retries: int, retry_backoff_seconds: floa
 
 
 def asr_error_retryable(result: ToolResult) -> bool:
+    """local_asr 后端的错误可重试性。
+
+    local_asr 在每个错误 ToolResult 上都带结构化标记: param_error=True (用法/
+    输入错误) 与 recoverable=False 不可重试; recoverable=True (CLI exit 2 服务
+    错误 / exit 3 任务失败 / 产物不可读) 可重试。文本启发式只作最后兜底。
+    """
     data = result.data or {}
     if data.get("param_error"):
         return False
     if data.get("recoverable") is False:
         return False
-    status_code = str(data.get("status_code") or "")
-    if status_code.startswith("55"):
+    if data.get("recoverable") is True:
         return True
     text = result.text.lower()
-    http_status = http_status_from_text(text)
-    if http_status is not None:
-        return http_status in {408, 409, 425, 429} or 500 <= http_status <= 599
     non_retryable = [
         "input_path is required",
         "file not found",
-        "no asr provider available",
         "not set",
         "not available",
         "ffmpeg not found",
         "audio too large",
-        "split the source media",
         "must be",
         "unsupported",
-        "package unavailable",
     ]
     if any(marker in text for marker in non_retryable):
         return False
     if data.get("retryable") is True:
         return True
     return message_retryable(text)
-
-
-def http_status_from_text(text: str) -> int | None:
-    marker = "http "
-    idx = text.find(marker)
-    if idx < 0:
-        return None
-    raw = text[idx + len(marker):].split(None, 1)[0].strip(":,.;")
-    try:
-        return int(raw)
-    except ValueError:
-        return None
 
 
 def message_retryable(message: object) -> bool:
@@ -497,8 +484,8 @@ def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
     provider_arg = str(args.get("provider") or clean_env("VE_ASR_PROVIDER") or "auto").strip().lower()
     if provider_arg not in ASR_PROVIDERS:
         return ToolResult(
-            text="[ERROR] provider must be auto or local_asr",
-            data={"supported_providers": ["auto", "local_asr"]},
+            text=f"[ERROR] provider must be one of: {', '.join(sorted(ASR_PROVIDERS))}",
+            data={"supported_providers": sorted(ASR_PROVIDERS)},
         )
 
     retries = coerce_asr_retry_count(args.get("retries", args.get("retry_count")))
@@ -518,6 +505,8 @@ def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
         diarize = True
     if not isinstance(diarize, bool):
         return ToolResult(text="[ERROR] diarize must be a boolean")
+    # 本地模型自判语言; 入参仅记录请求意图, 不影响识别
+    requested_language = str(args.get("language") or "").strip()
 
     started = time.time()
     # work_dir 按源路径哈希隔离: 不同目录的同名源视频不共用转写中间产物
@@ -546,6 +535,8 @@ def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
     transcript_payload, job_json_path = result
     transcript_payload["retry_attempts"] = retry_attempts
     transcript_payload["max_retries"] = retries
+    if requested_language:
+        transcript_payload["requested_language"] = requested_language
 
     output_path.write_text(
         json.dumps(transcript_payload, ensure_ascii=False, indent=2), encoding="utf-8",
@@ -572,6 +563,7 @@ def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
         "source_media": str(input_path),
         "job_json": str(job_json_path),
         "language": transcript_payload.get("language") or "",
+        **({"requested_language": requested_language} if requested_language else {}),
         "word_count": len(transcript_payload.get("words", [])),
         "segment_count": len(transcript_payload.get("segments", [])),
         "n_speakers": len({

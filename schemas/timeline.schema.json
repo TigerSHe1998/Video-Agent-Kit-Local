@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "video-agent-kit/timeline",
+  "$id": "video-agent-kit-local/timeline",
   "title": "Video Agent Timeline Project",
   "type": "object",
   "required": ["project", "assets", "tracks"],

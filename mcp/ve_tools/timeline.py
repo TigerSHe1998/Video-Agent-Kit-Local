@@ -5,7 +5,6 @@ import hashlib
 import json
 import math
 import shutil
-import subprocess
 from .ffproc import run_proc
 import time
 from pathlib import Path

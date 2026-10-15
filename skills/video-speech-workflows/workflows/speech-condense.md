@@ -40,7 +40,7 @@ Everything under `out/` relative to the project directory. Conversation text is 
 | File | What | When |
 |---|---|---|
 | `out/media.json` | Source probe from `inspect_media`. | First. |
-| `out/transcript.json` | ASR transcript with per-segment (ideally per-word) times. | Before indexing. |
+| `out/transcript.json` | ASR transcript with segment-level times (`words` is always empty with the local ASR). | Before indexing. |
 | `out/speech_index.json` + `.md` | Unit table, disfluency spans, pause analysis, time budget, **and the coarse visual survey** (constant thumbnail budget, shot-cut count, motion baseline). **Satisfies the visual-inspection requirement on its own.** | Before selecting. |
 | `out/video_ingest.json` | Dense 2fps sweep. Rarely needed and expensive — only when you must see content *between* the survey samples. | Almost never. |
 | `out/condense_brief.md` | Target length and its justification, what counts as essential for this piece, the keep strategy, the checkpoint list. | Before `condense_plan`. |
@@ -58,7 +58,7 @@ Everything under `out/` relative to the project directory. Conversation text is 
 
 `inspect_media(input_path)` — duration, resolution, orientation, audio streams.
 
-`speech_transcribe(input_path)` — the local ASR runs the transcription; check what you got. Word-level timestamps are not a nicety here: they decide whether cut points can land between words, whether filler excision is safe at all, and whether `condense_plan` can prove a boundary is not mid-syllable. If the local ASR is unavailable, continue only after recording the limitation.
+`speech_transcribe(input_path)` — the local ASR runs the transcription; check what you got. It provides **segment-level timestamps only** (word-level timing is a Moss model limitation and never appears), so cut points cannot be proven to land between words: plan cuts on segment boundaries, rely on silence snapping, and treat every content cut as needing a listening checkpoint. If the local ASR is unavailable, continue only after recording the limitation.
 
 **Do not guess a language.** The local model detects language itself; the `language` argument is recorded but does not affect recognition. Speaker diarization runs whenever `diarize=true` (the default). After speech_transcribe, inspect the transcript metadata (`provider`, `language`, `speaker_labels`, `segments[].speaker`) before doing anything else; if a multi-speaker piece came back without speaker labels, re-run `speech_transcribe` and make sure `diarize` was not disabled.
 
@@ -171,7 +171,7 @@ Options worth a deliberate choice:
 
 - **`tighten_pauses`** (on by default) is free compression — dead air removed without touching content. Leave it on unless the pauses are doing rhetorical work.
 - **`max_gap`** is the longest pause kept inside a run. Lower is tighter and more energetic; too low and the delivery sounds hurried and unnatural.
-- **`drop_fillers`** is `"hard"` (hesitation sounds and stutters) or `"aggressive"` (also standalone soft fillers). It requires word-level timestamps and is refused without them. **Default to leaving it off.** Every excision is another micro-cut, and measured on a real 5-minute interview the same keep-list went from 20 clips / 19 cuts / 0 errors / snap ratio 0.78 with it off, to 34 clips / 33 cuts with it on — 7 of those clips fell below `min_clip` and were dropped (losing content and undershooting the target), and 6 excisions landed within 20 ms of a neighbouring word. It buys a little polish and spends cut count, which is the thing that most damages a condensed cut. Turn it on only when the speaker's hesitation is genuinely distracting, and then read the tight-excision warnings and the clip count before accepting it.
+- **`drop_fillers`** is `"hard"` (hesitation sounds and stutters) or `"aggressive"` (also standalone soft fillers). It requires word-level timestamps, which the local ASR never provides (Moss model limitation) — `condense_plan` **always refuses it** with this backend. Remove fillers by dropping whole units instead.
 - **`lead_out` > `lead_in`** by default, and that asymmetry is deliberate: a beat of silence after the last word is what makes a cut read as "the thought finished".
 - **`min_clip`** guards against sub-second clips, which read as a stutter in the edit rather than as a sentence.
 
@@ -236,7 +236,7 @@ Fix at the level that caused the failure. Most condensing defects are keep-list 
 | Cut lands mid-word (`mid_word_cut`) | raise `snap_window`, or move the boundary to a unit edge |
 | Join sounds abrupt; content cut measured `in_speech` | `silence_db="auto"` and re-index, raise `snap_window`, or pick a different boundary |
 | Sounds hurried, no room to breathe | raise `max_gap`, raise `lead_out` |
-| Choppy — too many cuts per minute | consolidate the keep-list into longer runs; drop `drop_fillers` |
+| Choppy — too many cuts per minute | consolidate the keep-list into longer runs |
 | Visible jump cuts | fewer cuts (consolidate the keep-list into longer runs). `join="dissolve"` only for slow/formal material |
 | Over target | `next_moves.kept_units_worth_re_examining`, then re-plan |
 | Under target | `next_moves.dropped_units_with_the_most_content`, then re-plan |

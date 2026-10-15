@@ -1,6 +1,6 @@
 """Speaker-attribution repair for transcripts whose diarization collapsed.
 
-Cloud ASR transcribes the WORDS accurately but, on remote-mixed or
+The local ASR transcribes the WORDS accurately but, on remote-mixed or
 noisy multi-speaker audio, its built-in diarization can collapse two or more
 distinct speakers onto one label — verified on a 3-way podcast where an
 interviewer's questions and the guest's answers were all tagged speaker "1".
@@ -476,7 +476,7 @@ def _slice_text_by_words(text: str, words: list[dict]) -> list[str] | None:
 def _split_segment_by_speaker(seg: dict, words: list[dict]) -> list[dict] | None:
     """Split one segment into runs of consecutive same-speaker words.
 
-    This is the fix for the case that motivated it: cloud ASR routinely bundles a
+    This is the fix for the case that motivated it: ASR diarization routinely bundles a
     speaker change inside one segment — a player's answer running straight into
     the narrator's score recap — and a segment can only carry one speaker label.
     Labelling by the segment's midpoint then hands the whole span to whoever holds

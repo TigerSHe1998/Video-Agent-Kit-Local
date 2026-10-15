@@ -107,11 +107,19 @@ def _stage_input(input_path: Path, work_dir: Path) -> Path:
     """把输入放进 work_dir（CLI 会往输入旁写 job JSON，不能污染用户源目录）。
 
     硬链零拷贝；跨盘 os.link 失败回退完整复制。文件名保留 stem+后缀，同
-    work_dir 本来就按源路径哈希隔离，不会互撞。
+    work_dir 本来就按源路径哈希隔离，不会互撞。复用已有 staged 时校验
+    mtime: 显式共享 work_dir 下两个同名同大小的不同视频不至于静默转错。
     """
     staged = work_dir / input_path.name
-    if staged.exists() and staged.stat().st_size == input_path.stat().st_size:
-        return staged
+    try:
+        if (
+            staged.exists()
+            and staged.stat().st_size == input_path.stat().st_size
+            and staged.stat().st_mtime == input_path.stat().st_mtime
+        ):
+            return staged
+    except OSError:
+        pass
     staged.unlink(missing_ok=True)
     try:
         os.link(input_path, staged)
@@ -148,6 +156,7 @@ def local_asr_transcribe_payload(
 
     work_dir.mkdir(parents=True, exist_ok=True)
     staged = _stage_input(input_path, work_dir)
+    _clear_stale_outputs(staged)
     autosplit = _autosplit_value(autosplit_min)
     cmd = [
         status["command"],
@@ -219,16 +228,45 @@ def _safe_cmd(cmd: list[str]) -> str:
     return " ".join(cmd[:2]) + " …" if len(cmd) > 2 else " ".join(cmd)
 
 
+def _clear_stale_outputs(staged: Path) -> None:
+    """转录前清掉该输入的历史产物 JSON。
+
+    CLI 把结果写在 staged 文件旁: 单段是 <stem>.json, 分段是 <stem>.NofM.json。
+    不清的话, 先跑单段再跑分段时旧单文件会把新分段结果整个遮掉 (_collect_job_jsons
+    优先取单文件), 返回陈旧转录。staged 输入本身不动。
+    """
+    stem = staged.stem
+    for p in staged.parent.iterdir():
+        name = p.name
+        if name == f"{stem}.json" or (name.startswith(f"{stem}.") and "of" in name and name.endswith(".json")):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _collect_job_jsons(staged: Path) -> list[Path]:
-    """单段产物是 <stem>.json；autosplit 多段是 <stem>.1ofN.json …（按段序命名）。"""
+    """单段产物是 <stem>.json；autosplit 多段是 <stem>.NofM.json …（按段序升序）。
+
+    不用 glob: stem 含 ``[ ] * ?`` 等字符时 glob 模式会失配/误配。
+    """
     single = staged.with_suffix(".json")
     if single.is_file():
         return [single]
-    parts = sorted(
-        p for p in staged.parent.glob(f"{staged.stem}.*of*.json")
-        if p.is_file()
-    )
-    return parts
+    prefix = f"{staged.stem}."
+    parts = [
+        p for p in staged.parent.iterdir()
+        if p.name.startswith(prefix) and p.name.endswith(".json") and "of" in p.name
+    ]
+
+    def part_index(p: Path) -> int:
+        # "xxx.10of12.json" → 10; 解析失败排到最后
+        try:
+            return int(p.name[len(prefix):].split("of", 1)[0])
+        except ValueError:
+            return 10 ** 9
+
+    return sorted(parts, key=part_index)
 
 
 def _speaker_map(result: dict[str, Any]) -> dict[int, int]:
@@ -289,8 +327,11 @@ def _merge_job_jsons(
         result = job.get("result") if isinstance(job.get("result"), dict) else {}
         offset_ms = float((job.get("params") or {}).get("seg_offset_ms") or 0)
         audio_ms = job.get("audio_ms")
-        if isinstance(audio_ms, (int, float)) and audio_ms is not None:
-            audio_ms_total = offset_ms + float(audio_ms)
+        if isinstance(audio_ms, (int, float)):
+            # 取各段 max(offset+时长): 最后一段缺 audio_ms 时不会低估全片时长
+            total_ms = offset_ms + float(audio_ms)
+            if audio_ms_total is None or total_ms > audio_ms_total:
+                audio_ms_total = total_ms
         smap = _speaker_map(result)
 
         part_segments = result.get("segments") or []

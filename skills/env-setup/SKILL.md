@@ -21,7 +21,7 @@ python3 <plugin_root>/skills/env-setup/scripts/env_doctor.py --fix    # + instal
 ```
 
 (Windows: `python` instead of `python3` if that's what's on PATH.) Plugin root is
-announced at session start and written to `.video_agent/plugin_root`. Always call
+recorded in `.video_agent/env_report.json` (`plugin_root` field) after a doctor run. Always call
 it by absolute path — cwd is the project directory, not the skill directory. A
 full probe is a few seconds; give Bash ≥ 120s anyway, because a blocked network
 spends its timeouts before answering.
@@ -110,7 +110,7 @@ Notes that matter in practice:
 3. **Fix in the printed order.** An item whose prerequisite failed prints
    `[未探测]` instead of a guessed verdict — don't run a fix for an unprobed
    item; fix its prerequisite and re-run.
-4. **`·` means "not applicable on this OS", not "broken"**, and
+4. **`[-]` means "not applicable on this OS", not "broken"**, and
    `只降级不致命` means exactly that: the two speech-channel rows and disk headroom
    don't block a task. Everything else is a hard gap.
 5. **After a PATH-changing install, the new tool is invisible to the current
@@ -123,7 +123,7 @@ Notes that matter in practice:
    so **don't re-probe every turn**; re-probe after installing something or
    after a tool fails.
 7. **Report in capability terms, then stop if something's dead.** "ffmpeg has no
-   libass → subtitle burn-in unavailable; the recap can't ship. Install a full
+   libass → subtitle burn-in unavailable; subtitled deliverables can't ship. Install a full
    build and re-run `/env-check`." Do not enter a phase whose tools are dead and
    improvise around it.
 
@@ -175,7 +175,7 @@ code change, and not `sudo cp` into `/usr/share/fonts`.
   — the doctor already picked the right example for their machine; if they'd
   rather use their own method, that's fine, the requirement is what matters.
 - Reading this skill's tables and installing from them without running the doctor.
-- Treating a `[未探测]` line as a missing dependency, or a `·` (n/a) line as a defect.
+- Treating a `[未探测]` line as a missing dependency, or a `[-]` (n/a) line as a defect.
 - Auto-installing system-level software (ffmpeg, fonts) or uninstalling packages
   on the user's machine without being asked.
 - Retrying a stalled `pip install` unchanged on a machine that needs a mirror
@@ -183,7 +183,7 @@ code change, and not `sudo cp` into `/usr/share/fonts`.
 - Declaring the environment fixed off exit codes without a re-probe.
 - Re-running the full doctor every turn "to be safe" — `.video_agent/env_report.json`
   holds the last verdict.
-- Proceeding into a render or a recap with ffmpeg missing libass, letting it
+- Proceeding into a subtitle burn-in with ffmpeg missing libass, letting it
   surface as a mysterious tool error twenty rounds later.
 - **Asking the user for an ASR key.** Transcription is local — there is no key
   to give; the only fix is the `transcribe` CLI being on PATH. Chasing a key

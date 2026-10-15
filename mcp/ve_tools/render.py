@@ -4,7 +4,6 @@ import json
 import math
 import os
 import shutil
-import subprocess
 from .ffproc import run_proc, safe_expr, require_ffmpeg
 import time
 from pathlib import Path

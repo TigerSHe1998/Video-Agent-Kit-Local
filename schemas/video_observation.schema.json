@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "video-agent-kit/video-observation",
+  "$id": "video-agent-kit-local/video-observation",
   "title": "Video Observation Package",
   "type": "object",
   "required": [

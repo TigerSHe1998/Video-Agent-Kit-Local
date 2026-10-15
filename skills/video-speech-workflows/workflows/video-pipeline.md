@@ -111,7 +111,7 @@ The built-in colour-blind-safe palette assigns a stable colour by first appearan
 
 ### Karaoke
 
-Pass `style.karaoke=true` to `subtitle_build`; it cannot be added faithfully after building. Prefer `speech_transcribe` and confirm that words have real `start`/`end` times (the local ASR provides word-level timing). If only segment timing is available, disable karaoke unless the user explicitly accepts estimated timing, and record the limitation.
+Pass `style.karaoke=true` to `subtitle_build`; it cannot be added faithfully after building. The local ASR never provides word-level `start`/`end` times (Moss model limitation), so karaoke always runs on the estimated character-weighted sweep. Only use it when the user explicitly accepts estimated timing; otherwise prefer plain captions and record the limitation.
 
 ### Translation
 

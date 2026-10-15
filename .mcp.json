@@ -8,7 +8,6 @@
       ],
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "env": {
-        "VE_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}",
         "VE_MAX_INLINE_IMAGES": "${user_config.max_inline_images}"
       },
       "timeoutMs": 900000

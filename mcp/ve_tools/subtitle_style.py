@@ -11,7 +11,6 @@ import functools
 import math
 import re
 import shutil
-import subprocess
 from .ffproc import run_proc
 import unicodedata
 from pathlib import Path
