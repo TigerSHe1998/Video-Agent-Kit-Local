@@ -30,7 +30,7 @@ def qc_preview(args: dict, ctx: RunContext) -> ToolResult:
     started = time.time()
     media_result = inspect_media({
         "input_path": str(video_path),
-        "output_json": str(ctx.output_dir / f"{video_path.stem}_media.json"),
+        "output_json": str(ctx.ensure_output_dir() / f"{video_path.stem}_media.json"),
     }, ctx)
     if media_result.text.startswith("[ERROR]"):
         return ToolResult(text=f"[ERROR] media probe failed during QC: {media_result.text}", data=media_result.data)

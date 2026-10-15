@@ -186,7 +186,7 @@ def inspect_media(args: dict, ctx: RunContext) -> ToolResult:
     if output_json:
         p = ctx.resolve(output_json)
     else:
-        p = ctx.output_dir / "media.json"
+        p = ctx.ensure_output_dir() / "media.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     artifacts.append(str(p))
@@ -210,7 +210,7 @@ def analyze_media(args: dict, ctx: RunContext) -> ToolResult:
     if isinstance(scene_threshold, ToolResult):
         return scene_threshold
     started = time.time()
-    probe_sidecar = ctx.work_dir / "analysis" / f"{input_path.stem}_media.json"
+    probe_sidecar = ctx.ensure_work_dir("analysis") / f"{input_path.stem}_media.json"
     probe = inspect_media({"input_path": str(input_path), "output_json": str(probe_sidecar)}, ctx)
     if probe.text.startswith("[ERROR]"):
         return ToolResult(text=f"[ERROR] inspect failed during analyze_media: {probe.text}", data=probe.data)

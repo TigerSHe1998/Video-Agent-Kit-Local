@@ -162,7 +162,7 @@ def video_watch_segment(args: dict, ctx: RunContext) -> ToolResult:
     except ValueError as exc:
         return ToolResult(text=f"[ERROR] {exc}")
 
-    ledger_dir = ctx.work_dir / "video_watch_ledger" / video_ledger_id(src)
+    ledger_dir = ctx.ensure_work_dir("video_watch_ledger") / video_ledger_id(src)
     kept, ledger_notes = filter_covered_segments(segments, ledger_dir, fps=fps, force=force)
     if not kept:
         return ToolResult(

@@ -102,12 +102,14 @@ class RunContext:
     def __init__(self, session_kind: str = "cli") -> None:
         # "mcp" for the long-lived MCP server, "cli" for one-shot direct calls.
         # Long-lived MCP sessions can reuse active video/transcript state.
+        #
+        # out/ 与 .video_agent/ 不在构造时创建: server 随每个工作区会话启动,
+        # 预防性 mkdir 会让用户"刚打开工作区、还没说话"就多出两个文件夹。
+        # 目录由 ensure_output_dir/ensure_work_dir 在首次真正写产物时惰性创建。
         self.session_kind = session_kind
         self.project_dir = project_dir()
         self.output_dir = self.project_dir / "out"
         self.work_dir = self.project_dir / ".video_agent"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.work_dir.mkdir(parents=True, exist_ok=True)
         self.active_video_path: Path | None = None
         self.active_video_key: str | None = None
         self.active_video_visually_ingested: bool = False
@@ -116,6 +118,15 @@ class RunContext:
         self.active_transcript_fingerprint: str | None = None
         self._transcripts_by_video: dict[str, TranscriptMemory] = {}
         self._visually_ingested_video_keys: set[str] = set()
+
+    def ensure_output_dir(self) -> Path:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        return self.output_dir
+
+    def ensure_work_dir(self, *subpath: str) -> Path:
+        target = self.work_dir.joinpath(*subpath) if subpath else self.work_dir
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
     def resolve(self, path: str | Path) -> Path:
         p = Path(path)
