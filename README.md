@@ -36,7 +36,7 @@
 ```text
 commands/video-edit.md
 commands/env-check.md
-skills/env-setup/SKILL.md
+skills/sys-setup/SKILL.md
 skills/video-edit-agent/SKILL.md
 skills/video-edit-assembly/SKILL.md
 skills/video-speech-workflows/SKILL.md
@@ -45,8 +45,8 @@ skills/video-speech-workflows/SKILL.md
 `video-edit-agent` 是总控入口，负责素材发现、任务分类、通用文件契约、timeline
 验证、渲染、QC 和修复闭环；`video-edit-assembly` 是多素材组装成片子流程，
 用于多段视频/音频/图片素材的分组、选择、去重、排序和成片结构规划；
-`video-speech-workflows` 处理单源语音压缩和字幕；`env-setup` 只管环境（体检 + 装依赖，
-跨 macOS / Windows / Linux），不碰剪辑任务。
+`video-speech-workflows` 处理单源语音压缩和字幕；`sys-setup` 只管系统级环境体检
+（ffmpeg/字体/转录 CLI，跨 macOS / Windows / Linux），不碰剪辑任务；Python 依赖由 venv 自举自动管理。
 
 ### Python 依赖（自动，无需手工安装）
 
@@ -62,12 +62,11 @@ python3 "<插件根>/mcp/bootstrap.py" --ensure
 
 ```bash
 # 只体检：逐项报"要什么 / 缺了挂哪个能力 / 本平台怎么装"
-python3 "<插件根>/skills/env-setup/scripts/env_doctor.py"
+python3 "<插件根>/skills/sys-setup/scripts/env_doctor.py"
 # 体检 + 自动修可自动修的项（pip 依赖统一走 bootstrap 装进插件 .venv）
-python3 "<插件根>/skills/env-setup/scripts/env_doctor.py" --fix
 ```
 
-会话里也可以直接用 `/env-check`（对应 `env-setup` skill）。体检结论落在
+会话里也可以直接用 `/env-check`（对应 `sys-setup` skill）。体检结论落在
 `.video_agent/env_report.json`，不必每轮重跑。
 
 它查的不止"包在不在"：ffmpeg 有没有带 `libx264` / `aac` / `libmp3lame` 与
@@ -82,7 +81,7 @@ python3 "<插件根>/skills/env-setup/scripts/env_doctor.py" --fix
 
 MCP 工具调用的 `arguments` 顶层必须是 JSON object；如果入口传入数组、字符串等非对象参数，server 会直接返回结构化错误，不把异常泄漏成工具 traceback。
 
-本插件不注册任何会话 hook，收尾与流程纪律全部由 skill 文档约束。环境检查走 `/env-check`（对应 `env-setup` skill，跨 macOS / Windows / Linux，默认用国内镜像）。剪辑任务的标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；收尾前按 `video-edit-agent` 的文件契约自查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不触发契约。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
+本插件不注册任何会话 hook，收尾与流程纪律全部由 skill 文档约束。环境检查走 `/env-check`（对应 `sys-setup` skill，管系统级依赖，默认用国内镜像）。剪辑任务的标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；收尾前按 `video-edit-agent` 的文件契约自查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不触发契约。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
 
 推荐工作流：
 

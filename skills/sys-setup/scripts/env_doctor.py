@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""video-agent-kit 环境体检: 逐项探测 → 输出「缺什么 / 挂哪个能力 / 本平台怎么装」。
+"""video-agent-kit-local 系统级环境体检: 逐项探测 → 输出「缺什么 / 挂哪个能力 / 本平台怎么装」。
 
-跨平台 (macOS / Windows / Linux)。设计约束照 video2code 的同名脚本:
+只管**系统级**依赖 (ffmpeg/字体/转录 CLI/磁盘) —— Python 依赖由 mcp/bootstrap.py
+自动管理 (插件内 .venv, 首次调用自动构建), 不在本脚本的检查范围内。
+
+跨平台 (macOS / Windows / Linux):
 - **要求先于命令**: 每项先说清"需要什么"(名字 + 版本线), 再按当前平台给示例命令。
   用户机器长什么样这里不知道 (有没有 brew/winget、有没有管理员权限、是不是 conda
   环境), 所以命令是示例不是规定 —— 只有要求是硬的。
-- **探测与修复分离**: 默认只读探测; `--fix` 才动手, 且只跑标了 auto 的项 (用户态、
-  幂等)。系统级软件 (ffmpeg / 字体 / 系统库) 永远只打印, 不自动执行。
+- **探测与修复分离**: 默认只读探测。系统级软件 (ffmpeg / 字体) 永远只打印,
+  不自动执行。
 - **单一事实源**: `/env-check` 命令 (commands/env-check.md) 与本脚本的检查项
   同源, 依赖清单不许两处各写一份 (漂移过一次就永远漂移)。
 - **探测顺序即依赖顺序**: 没装 ffmpeg 就不必再问它有没有 libass —— 后置项标
@@ -20,7 +23,6 @@
   env_doctor.py            # 全量探测 + 修复计划
   env_doctor.py --cheap    # 只跑毫秒级项 (无网络)
   env_doctor.py --json     # 机器可读
-  env_doctor.py --fix      # 探测后自动装 auto 项, 再复测这些项
 """
 from __future__ import annotations
 
@@ -41,8 +43,6 @@ PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR")
                    or os.environ.get("VE_PROJECT_DIR") or Path.cwd())
 REQUIREMENTS = PLUGIN_ROOT / "requirements.txt"
 PY = sys.executable or "python3"
-# 命令行里用 PYQ: Windows 解释器路径常含空格, do_fix 又走 shell=True
-PYQ = f'"{PY}"' if " " in PY else PY
 
 OS = ("macos" if sys.platform == "darwin"
       else "windows" if os.name == "nt" else "linux")
@@ -72,19 +72,6 @@ def by_os(**variants: list[str]) -> list[str]:
     return variants.get(OS) or variants.get("any") or []
 
 
-def pip_install(*specs: str, no_deps: bool = False) -> str:
-    quoted = " ".join(f'"{s}"' if any(c in s for c in "<>=") else s for s in specs)
-    return f"{PYQ} -m pip install -i {PIP_INDEX}{' --no-deps' if no_deps else ''} {quoted}"
-
-
-PIP_MIRROR_NOTES = [
-    f"# 上面用的是清华镜像; 阿里云: -i {PIP_ALIYUN}",
-    f"# 想一劳永逸设成默认 (改的是全局 pip 配置, 影响这台机器上所有项目, 先问用户):",
-    f"#   {PYQ} -m pip config set global.index-url {PIP_INDEX}",
-    "# 镜像同步滞后/缺包时才回官方源: 去掉 -i 参数重试",
-]
-
-
 # ── 检查项模型 ───────────────────────────────────────────────────────────────
 @dataclass
 class Check:
@@ -111,22 +98,12 @@ class Result:
 
 
 # ── 探测实现 ─────────────────────────────────────────────────────────────────
-def probe_py_version() -> tuple[bool, str]:
-    v = sys.version_info
-    return v >= (3, 10), f"{v.major}.{v.minor}.{v.micro} at {PY}"
-
-
 # ── 插件 venv (依赖的真正归宿) ────────────────────────────────────────────────
 # 依赖由 mcp/bootstrap.py 管理: venv 在插件目录内, 首次调用自动创建。
 # 体检必须探测 venv, 而不是跑 doctor 的解释器 —— 两者经常不是同一个。
 BOOTSTRAP = PLUGIN_ROOT / "mcp" / "bootstrap.py"
 VENV_DIR = PLUGIN_ROOT / ".venv"
 VENV_PY = VENV_DIR / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-
-
-def _bootstrap_ensure_cmd() -> str:
-    py = f'"{PY}"' if " " in PY else PY
-    return f"{py} \"{BOOTSTRAP}\" --ensure"
 
 
 def _requirements_stamp() -> str | None:
@@ -159,102 +136,6 @@ def venv_state() -> tuple[str, str]:
     if stamp.read_text(encoding="utf-8").strip() != expect:
         return "stale", "requirements 已变化, 下次调用自动增量重装 (或 --ensure 立即)"
     return "healthy", f"{VENV_DIR}"
-
-
-def probe_venv() -> tuple[bool, str]:
-    state, detail = venv_state()
-    # missing/healthy/stale 都算 ok (stale 会在下次调用自动增量装); broken 需要修
-    return state != "broken", f"{state}: {detail}"
-
-
-def _venv_probe(code: str) -> tuple[bool, str]:
-    """在插件 venv 解释器里跑一段探测代码 (单行, 分号分隔), 返回 (ok, detail)。
-    venv missing 时不报缺 (自动构建); broken 才是缺口。"""
-    state, detail = venv_state()
-    if state == "missing":
-        return True, f"venv 未创建 (首次调用自动构建)"
-    if state == "broken":
-        return False, f"venv 损坏: {detail}"
-    import subprocess as _sp
-
-    r = _sp.run([str(VENV_PY), "-c", code], capture_output=True, text=True,
-                timeout=60, stdin=_sp.DEVNULL)
-    out = r.stdout.strip()
-    err = (r.stderr or r.stdout or "").strip()
-    if r.returncode != 0:
-        return False, (err.splitlines()[-1][:160] if err else "探测失败")
-    return (not out.startswith("MISSING")), out or "已装"
-
-
-def probe_pip() -> tuple[bool, str]:
-    """pip must be present AND not locked by PEP 668 (externally-managed),
-    otherwise every --fix install silently fails. System Pythons on Debian 12+,
-    Ubuntu 23.04+, Homebrew, and slim images are the common offenders."""
-    if importlib.util.find_spec("pip") is None:
-        return False, "未安装 (python -m pip 不可用)"
-    import sysconfig
-
-    candidates = [Path(sys.prefix) / "EXTERNALLY-MANAGED"]
-    try:
-        stdlib = Path(sysconfig.get_path("stdlib"))
-        candidates.append(stdlib / "EXTERNALLY-MANAGED")
-        candidates.append(stdlib.parent / "EXTERNALLY-MANAGED")
-    except Exception:  # noqa: BLE001
-        pass
-    for c in candidates:
-        try:
-            if c.is_file():
-                return False, ("外部托管环境 (PEP 668 externally-managed): pip 拒绝直接装包 — "
-                               "用 venv/pipx, 或加 --break-system-packages")
-        except OSError:
-            continue
-    return True, f"可用 {_dist_version('pip') or ''}".strip()
-
-
-def probe_module(mod: str) -> Callable[[], tuple[bool, str]]:
-    """在插件 venv 里探测 (依赖的真正归宿); venv missing 视为待自动构建。"""
-    def _p() -> tuple[bool, str]:
-        return _venv_probe(
-            "import importlib.util as u; "
-            f"print('MISSING' if u.find_spec({mod!r}) is None else '已装')"
-        )
-    return _p
-
-
-def _dist_version(name: str) -> str | None:
-    try:
-        from importlib.metadata import version
-
-        return version(name)
-    except Exception:
-        return None
-
-
-def probe_mcp() -> tuple[bool, str]:
-    """mcp 1.x —— server_common.py 用的是 1.x 的 Server.list_tools/call_tool 装饰器
-    API, 2.x 改了这套接口, "装了但是大版本不对"会让所有工具消失而不是报错。
-    在插件 venv 里探测 (依赖的真正归宿); venv missing 视为待自动构建。"""
-    return _venv_probe(
-        "from importlib.metadata import version; "
-        "v = version('mcp'); "
-        "m = int(v.split('.')[0]); "
-        "print(v if m == 1 else f'{v} [!] 需要 1.x (2.x 改了 Server API)')"
-    )
-
-
-def probe_cv2_conflict() -> tuple[bool, str]:
-    """opencv-python(GUI) 与 opencv-python-headless 混装 —— 两个包提供同一个 cv2
-    目录, pip 不认为它们冲突, 装第二个会覆盖第一个的文件, 结果是 import cv2 成功
-    但某些符号缺失/崩在 libGL 上。requirements.txt 只要 headless。
-    在插件 venv 里探测; venv missing 视为待自动构建。"""
-    return _venv_probe(
-        "import importlib.metadata as m; "
-        "names = {d.metadata['Name'] for d in m.distributions()}; "
-        "print('MISSING: venv 里同时装了 opencv-python (GUI 版) 和 headless' "
-        "if ('opencv-python' in names and 'opencv-python-headless' in names) else "
-        "('仅 headless, 干净' if 'opencv-python-headless' in names else "
-        "'cv2 未装 (见 py-cv2 项)'))"
-    )
 
 
 def probe_bins(*bins: str) -> Callable[[], tuple[bool, str]]:
@@ -386,56 +267,8 @@ def probe_disk() -> tuple[bool, str]:
 
 
 # ── 检查清单 (顺序即展示顺序) ────────────────────────────────────────────────
-PY_MODULES = [
-    ("cv2", "opencv-python-headless>=4.8.0,<5.0.0", "video_ingest 抽帧 / 局部复看 / QC 扫描"),
-    ("numpy", "numpy>=1.24.0", "抽帧索引与帧差计算"),
-    ("PIL", "pillow>=10.0.0", "contact sheet 拼图 (模型能看到的那张图)"),
-    ("jieba", "jieba>=0.42.1", "subtitle_build 的中文分词/词性 — 缺则字幕断行不可用"),
-    ("fontTools", "fonttools>=4.40.0", "字体 cmap 校验 (烧字幕前拦下豆腐块)"),
-]
 
 CHECKS: list[Check] = [
-    Check("py", "python3 ≥ 3.10", "MCP server 用了 3.10+ 运行时语法 (X | Y 类型别名)",
-          probe_py_version,
-          need="Python 3.10 或更高 (bootstrap 用它创建插件 .venv, 语法约束仍适用)",
-          fix=["# 换一个 3.10+ 解释器, 例如 conda create -n va python=3.12"],
-          cheap=True),
-    Check("venv", "插件 venv (依赖归宿)", "python 依赖装在插件目录内 .venv — 首次调用 MCP/CLI 时自动构建, 不碰全局环境",
-          probe_venv,
-          need="missing/healthy/stale 均为正常态 (自动构建/自动增量); broken 才需要修",
-          fix=[f"# 手动 (预) 构建 / 修复: {_bootstrap_ensure_cmd()}",
-               f"# venv 位置: {VENV_DIR} (随插件安装/更新/卸载走; VE_VENV_DIR 可改)"],
-          cheap=True, needs="py"),
-    Check("py-pip", "python 包管理: pip (非 PEP 668 外部托管)",
-          "bootstrap 建 venv/装依赖都靠它 — pip 缺失或被 externally-managed 拦住时, venv 构建会失败",
-          probe_pip,
-          need="pip 可用, 且不是 externally-managed 环境 (系统 Python 常被 PEP 668 锁)",
-          fix=["# pip 本身缺失时先确保: python -m ensurepip --upgrade",
-               "# PEP 668 只锁系统解释器; bootstrap 建的 venv 不受影响, 通常无需处理"],
-          cheap=True, needs="py"),
-    Check("py-mcp", "python 包: mcp (1.x)", "MCP server 本体 — 缺则所有剪辑工具都不存在 (装进插件 venv)",
-          probe_mcp,
-          need="pip 包 mcp>=1.0.0,<2.0.0 (装进插件 .venv; 缺失时首跑 bootstrap 会自动装)",
-          fix=[f"# 自动安装 (bootstrap 在插件 venv 内装齐全部依赖): {_bootstrap_ensure_cmd()}",
-               "# 换镜像: 设 VE_PIP_INDEX 后重跑"],
-          cheap=True, auto=True, slow=True, needs="venv"),
-    *[Check(f"py-{mod}", f"python 包: {mod}", why, probe_module(mod),
-            need=f"pip 包 {pkg} (装进插件 .venv; 由 bootstrap 统一管理)",
-            fix=[f"# 统一修复入口 (在插件 venv 内装齐全部依赖): {_bootstrap_ensure_cmd()}"],
-            cheap=True, auto=True, slow=True, needs="venv")
-      for mod, pkg, why in PY_MODULES],
-    Check("py-scenedetect", "python 包: scenedetect", "`detect_shots` 的镜头边界检测 (shots)",
-          probe_module("scenedetect"),
-          need="pip 包 scenedetect>=0.6, **必须 --no-deps 装** + 它的三个纯 python 依赖 (bootstrap 已内置此逻辑)",
-          fix=[f"# 统一修复入口 (bootstrap 处理 --no-deps 与三个纯依赖): {_bootstrap_ensure_cmd()}"],
-          cheap=True, auto=True, slow=True, needs="venv"),
-    Check("cv2-clean", "cv2 无 GUI/headless 混装", "混装会让 cv2 半坏: import 成功但抽帧崩在 libGL (在插件 venv 里检查)",
-          probe_cv2_conflict,
-          need="插件 venv 里只装 opencv-python-headless 一个 (不要同时装 opencv-python)",
-          # venv 是插件私有的, 修它不动用户全局环境
-          fix=[f"# 重建干净 venv (推荐, 一并修复依赖): {_bootstrap_ensure_cmd()}",
-               "# 或手动: 删除插件目录下 .venv 后重跑上面命令"],
-          cheap=True, needs="py-cv2"),
     Check("ffmpeg", "ffmpeg + ffprobe", "剪切 / 渲染 / 抽帧 / 时长探测 —— 缺了整条流水线都起不来",
           probe_bins("ffmpeg", "ffprobe"),
           need="ffmpeg (含 ffprobe), 且在 PATH 上 —— 版本不挑, 4.3 起都行 (xfade 要 4.3+)",
@@ -541,7 +374,7 @@ def run_checks(cheap_only: bool = False, only: set[str] | None = None) -> list[R
 
 
 def render(results: list[Result]) -> str:
-    lines = [f"[env] video-agent-kit 环境体检 (平台 {OS}; 解释器 {PY})"]
+    lines = [f"[env] video-agent-kit-local 系统级环境体检 (平台 {OS}; 解释器 {PY}) — python 依赖由插件 venv 自举管理, 不在此列"]
     for r in results:
         lines.append(f"  {MARK[r.status]} {r.check.label:30} {r.detail}")
     # na = 本平台不适用, 不是缺口 —— 不计进未就绪
@@ -571,38 +404,7 @@ def render(results: list[Result]) -> str:
             lines.append(f"       需要: {r.check.need}")
         for cmd in r.check.fix:
             lines.append(f"       {cmd}")
-    if any(r.check.auto for r in bad if r.status == "missing"):
-        lines.append(f"[env] 自动项可一把过: python3 {Path(__file__).name} --fix "
-                     "(自动项统一走 bootstrap, 依赖装进插件 .venv, 不碰全局环境)")
     return "\n".join(lines)
-
-
-def do_fix(results: list[Result]) -> list[Result]:
-    """跑 auto 项的修复命令, 然后只复测这些项。非 auto 项一律不碰。"""
-    todo = [r for r in results if r.status == "missing" and r.check.auto]
-    if not todo:
-        print("[env] 没有可自动装的项 (剩下的要你自己装, 见上面的『需要』行)。")
-        return results
-    fixed: set[str] = set()
-    for r in todo:
-        env = {**os.environ, **r.check.env} if r.check.env else None
-        for cmd in r.check.fix:
-            if cmd.lstrip().startswith("#"):
-                continue
-            print(f"[env] $ {cmd}", flush=True)
-            p = subprocess.run(cmd, shell=True, timeout=1800, env=env)
-            if p.returncode != 0:
-                print(f"[env] [!] 失败 (退出码 {p.returncode}): {r.check.label} — "
-                      "先看上面的报错; 常见根因: externally-managed (PEP 668, 用 venv/"
-                      "--break-system-packages)、镜像源/代理、或 pip 权限不足",
-                      flush=True)
-                break
-        else:
-            fixed.add(r.check.id)
-    if not fixed:
-        return results
-    recheck = {res.check.id: res for res in run_checks(only=fixed)}
-    return [recheck.get(r.check.id, r) for r in results]
 
 
 def main() -> int:
@@ -616,12 +418,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="video-agent-kit 环境体检")
     ap.add_argument("--json", action="store_true", help="机器可读输出")
     ap.add_argument("--cheap", action="store_true", help="只跑毫秒级项 (无网络)")
-    ap.add_argument("--fix", action="store_true", help="自动安装 auto 项后复测")
     args = ap.parse_args()
 
     results = run_checks(cheap_only=args.cheap)
-    if args.fix:
-        results = do_fix(results)
 
     payload = {"plugin_root": str(PLUGIN_ROOT),
                "platform": OS,

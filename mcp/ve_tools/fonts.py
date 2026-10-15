@@ -20,9 +20,9 @@ Search order is deliberate, and step 2 is why it is safe to adopt everywhere:
 3. the current platform's system font dirs — mac/Windows ship CJK fonts, they
    were simply never looked at.
 
-Nothing here imports a third-party package at module level: `env_doctor.py`
-imports this module directly to probe the font situation, and that has to work
-on a machine where pip installs have not happened yet.
+Nothing here imports a third-party package at module level: the sys-setup
+doctor imports this module (inside the plugin venv) to probe the font
+situation, and font discovery must stay importable from stdlib-only callers.
 """
 from __future__ import annotations
 
