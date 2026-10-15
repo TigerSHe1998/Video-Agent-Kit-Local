@@ -1,0 +1,65 @@
+{
+  "name": "video-agent-kit",
+  "version": "0.4.3",
+  "description": "自动化视频剪辑工具包: 标准云端语音转录与合成、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和 TTS。",
+  "author": {
+    "name": "Z.ai",
+    "url": "https://z.ai"
+  },
+  "license": "MIT",
+  "keywords": [
+    "video-editing",
+    "video-agent",
+    "visual-inspection",
+    "timeline",
+    "ffmpeg"
+  ],
+  "userConfig": {
+    "speech_mcp_url": {
+      "title": "Speech MCP URL",
+      "description": "Optional remote HTTP MCP server URL for paid speech tools.",
+      "type": "string",
+      "default": ""
+    },
+    "speech_mcp_token": {
+      "title": "Speech MCP token",
+      "description": "Optional bearer token for the remote speech MCP server.",
+      "type": "string",
+      "default": ""
+    },
+    "bgm_dir": {
+      "title": "BGM directory",
+      "description": "Optional music library directory for render_narrated.",
+      "type": "string",
+      "default": ""
+    },
+    "max_inline_images": {
+      "title": "Max inline images",
+      "description": "Maximum images inlined in one MCP tool result before remaining paths are listed for Read.",
+      "type": "number",
+      "default": 16
+    }
+  },
+  "description_i18n": {
+    "en": "Automated video editing toolkit: standard cloud speech transcription and synthesis, full video frame extraction and understanding, local re-inspection, timeline, preview rendering, QC, and TTS.",
+    "zh-CN": "自动化视频剪辑工具包: 标准云端语音转录与合成、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和 TTS。"
+  },
+  "mcpServers": {
+    "video-edit": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp/video_edit_server.py"
+      ],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "env": {
+        "VE_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}",
+        "VE_SPEECH_MCP_URL": "${user_config.speech_mcp_url}",
+        "VE_SPEECH_MCP_TOKEN": "${user_config.speech_mcp_token}",
+        "VE_BGM_DIR": "${user_config.bgm_dir}",
+        "VE_MAX_INLINE_IMAGES": "${user_config.max_inline_images}"
+      },
+      "timeoutMs": 900000
+    }
+  }
+}
