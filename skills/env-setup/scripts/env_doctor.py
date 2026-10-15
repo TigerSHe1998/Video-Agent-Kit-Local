@@ -7,8 +7,8 @@
   环境), 所以命令是示例不是规定 —— 只有要求是硬的。
 - **探测与修复分离**: 默认只读探测; `--fix` 才动手, 且只跑标了 auto 的项 (用户态、
   幂等)。系统级软件 (ffmpeg / 字体 / 系统库) 永远只打印, 不自动执行。
-- **单一事实源**: SessionStart hook (`hooks/env_check.py`) 直接 import 这里的
-  cheap 检查项和凭据探测, 依赖清单不许两处各写一份 (漂移过一次就永远漂移)。
+- **单一事实源**: `/env-check` 命令 (commands/env-check.md) 与本脚本的检查项
+  同源, 依赖清单不许两处各写一份 (漂移过一次就永远漂移)。
 - **探测顺序即依赖顺序**: 没装 ffmpeg 就不必再问它有没有 libass —— 后置项标
   `needs`, 前置失败则整项跳过 (报 skip 而不是伪失败), 免得一个根因炸出五条噪音。
 - **"装了" ≠ "能用"**: 这个插件挂在"装了但不带某个 feature"上的次数比挂在"没装"上
@@ -18,7 +18,7 @@
 
 用法:
   env_doctor.py            # 全量探测 + 修复计划
-  env_doctor.py --cheap    # 只跑毫秒级项 (无网络), hook 用
+  env_doctor.py --cheap    # 只跑毫秒级项 (无网络)
   env_doctor.py --json     # 机器可读
   env_doctor.py --fix      # 探测后自动装 auto 项, 再复测这些项
 """
@@ -382,9 +382,9 @@ PY_MODULES = [
 ]
 
 CHECKS: list[Check] = [
-    Check("py", "python3 ≥ 3.10", "hook 与 MCP server 用了 3.10+ 运行时语法 (X | Y 类型别名)",
+    Check("py", "python3 ≥ 3.10", "MCP server 用了 3.10+ 运行时语法 (X | Y 类型别名)",
           probe_py_version,
-          need="Python 3.10 或更高 (CC 调 hook/MCP 用的就是这个解释器)",
+          need="Python 3.10 或更高 (宿主拉起 MCP server 用的就是这个解释器)",
           fix=["# 换一个 3.10+ 解释器, 例如 conda create -n va python=3.12"],
           cheap=True),
     Check("py-pip", "python 包管理: pip (非 PEP 668 外部托管)",
@@ -560,35 +560,6 @@ def run_checks(cheap_only: bool = False, only: set[str] | None = None) -> list[R
     return results
 
 
-def cheap_missing() -> list[str]:
-    """SessionStart hook 用: 只跑毫秒级项, 返回 "标签 (为什么需要)" 列表。"""
-    return [f"{r.check.label} ({r.check.why})"
-            for r in run_checks(cheap_only=True) if r.status == "missing"]
-
-
-def credential_lines() -> list[str]:
-    """SessionStart hook 用: 转录/合成通道一行一条 (不碰网络, 只看配置)。
-
-    在 ZCode 里这两行报的是"官方通道就绪"。措辞要紧: 上一版这里会打
-    "ASR: cloud_asr 不可用: credentials not set ...", 每个会话开头都摆在模型面前,
-    于是模型把"去配一个 key"当成任务第一步 —— 而实际上官方通道本来就能用。
-    """
-    lines = []
-    for label, probe in (("ASR (speech_transcribe):", probe_asr), ("TTS (speech_synthesize):", probe_tts)):
-        try:
-            ok, detail = probe()
-        except Exception as e:
-            ok, detail = False, f"{type(e).__name__}: {e}"
-        if ok:
-            lines.append(f"{label} {detail}")
-        else:
-            lines.append(
-                f"{label} 未就绪: {detail}"
-                " — 本地不需要 key; 在 ZCode 中运行即走官方通道, 其他宿主见 /env-check"
-            )
-    return lines
-
-
 def render(results: list[Result]) -> str:
     lines = [f"[env] video-agent-kit 环境体检 (平台 {OS}; 解释器 {PY})"]
     for r in results:
@@ -668,7 +639,7 @@ def main() -> int:
         pass
     ap = argparse.ArgumentParser(description="video-agent-kit 环境体检")
     ap.add_argument("--json", action="store_true", help="机器可读输出")
-    ap.add_argument("--cheap", action="store_true", help="只跑毫秒级项 (hook 用)")
+    ap.add_argument("--cheap", action="store_true", help="只跑毫秒级项 (无网络)")
     ap.add_argument("--fix", action="store_true", help="自动安装 auto 项后复测")
     args = ap.parse_args()
 

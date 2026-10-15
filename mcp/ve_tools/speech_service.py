@@ -114,16 +114,7 @@ def remote_speech_url_is_loopback(url: str | None = None) -> bool:
 
 
 def cloud_asr_available(ctx: Any | None = None) -> bool:
-    """Is *some* transcription channel reachable?
-
-    Order matters, and so does the ``ctx`` -less case: hooks (closeout contract)
-    call this from a separate process with no tool-call context, so they cannot
-    see the per-call ZCode identity headers. Presence of ``ZCODE_BASE_URL`` is
-    the best signal available there, and it is the right one to trust — under
-    ZCode the official channel needs no local credentials, so answering "no"
-    just because no API key is configured would wrongly excuse the run from
-    producing a transcript.
-    """
+    """Is *some* transcription channel reachable?"""
     if remote_speech_configured():
         return True
     if ctx is not None:

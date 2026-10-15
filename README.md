@@ -26,7 +26,7 @@
 
 `video-recap-workflows` 覆盖完整电影、足球、LoL 和篮球解说剪辑。电影解说使用 `detect_shots` / `arrange_footage` / `synthesize_narration` / `bind_narration` / `render_narrated`；足球使用 `soccer_ingest` / `soccer_arrange` / `soccer_tts` / `soccer_render`；LoL 与篮球复用 `lol_ingest` / `lol_arrange` / `lol_tts` / `lol_render`。这些流程通常产出 `out/final.mp4` 和 workflow-specific QC，而不是通用 `out/preview.mp4`。
 
-`out/media.json` 保留给源素材探测。`qc_preview` 和 `tts_generate` 内部做媒体探测时会写 `out/preview_media.json`、`out/tts_*_media.json` 这类 sidecar，不覆盖源素材 metadata。`validate_timeline` 和 `qc_preview` 会在报告中写入文件 hash；Stop hook 会拒绝已经过期的 validation / QC report。
+`out/media.json` 保留给源素材探测。`qc_preview` 和 `tts_generate` 内部做媒体探测时会写 `out/preview_media.json`、`out/tts_*_media.json` 这类 sidecar，不覆盖源素材 metadata。`validate_timeline` 和 `qc_preview` 会在报告中写入文件 hash；收尾前必须核对这些 hash 以拒绝已经过期的 validation / QC report（由 `video-edit-agent` skill 的完成门负责，不再依赖 hook）。
 
 `schemas/video_observation.schema.json` 对应工具真实落盘的 observation package，即 `video_ingest` / `video_watch_segment` 生成的帧清单、sheet 清单、媒体元数据、抽帧参数和匹配转录。模型读图后的主观摘要、候选片段和风险判断应写入 `out/report.md` 或后续独立的 review 文件，不写回这个工具产物 schema。
 
@@ -83,7 +83,7 @@ python3 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-deps "sc
 
 MCP 工具调用的 `arguments` 顶层必须是 JSON object；如果入口传入数组、字符串等非对象参数，server 会直接返回结构化错误，不把异常泄漏成工具 traceback。
 
-插件启动时会通过 `hooks/env_check.py` 做一次非阻塞环境检查（只跑毫秒级项，清单直接从 `skills/env-setup/scripts/env_doctor.py` 的 cheap 检查项取，不在 hook 里另写一份），提示缺失的 `ffmpeg`、`ffprobe`、MCP SDK、抽帧依赖，并报出语音走哪条通道（ZCode 下即"官方通道，本地无需 key"）；要做全量体检（ffmpeg 编码器与 libass 滤镜、中文字体真覆盖、直连兼容端点连通性）走 `/env-check`。TTS 调用依赖按需懒加载；缺 TTS 依赖只应影响 `speech_synthesize` / `tts_generate`，不应影响媒体探测、抽帧、timeline、渲染和 QC。用户 prompt 出现本地视频路径时，`hooks/check_video_input.py` 会提示标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；只有当剪辑流水线产物（`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4` 或 `out/preview_qc_report.json`）出现后，`hooks/check_closeout.py` 才会在停止前检查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`（仅当 cloud ASR 可用时要求）、源素材 `video_ingest` 观察包（单素材 `out/video_ingest.json`，多素材 `out/ingest/*.json` 或 `out/video_ingest_<source>.json`）、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环；当 recap 后期产物（如 `out/reel.json`、`out/edl.json`、`out/final.mp4`、`out/qc.json`）出现后，同一个 hook 会改查 recap 合同：最终视频、绑定/QC 报告、TTS 忠实度失败、句画抽查和 `out/report.md`。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不会触发契约。闭环 strike 计数按会话隔离，最多拦 3 次后放行并记录 violation。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
+本插件不注册任何会话 hook，收尾与流程纪律全部由 skill 文档约束。环境检查走 `/env-check`（对应 `env-setup` skill，跨 macOS / Windows / Linux，默认用国内镜像）。TTS 调用依赖按需懒加载；缺 TTS 依赖只应影响 `speech_synthesize` / `tts_generate`，不应影响媒体探测、抽帧、timeline、渲染和 QC。剪辑任务的标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；收尾前按 `video-edit-agent` 的文件契约自查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环；recap 任务改查 recap 合同（最终视频、绑定/QC 报告、TTS 忠实度、句画抽查和 `out/report.md`）。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不触发契约。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
 
 推荐工作流：
 
@@ -114,7 +114,7 @@ video-edit-agent classify
 2. 项目目录 `.env`（按项目覆盖）；
 3. 插件根目录 `.env`（插件级默认值）。
 
-完整可配置项参考 `.env.example`。SessionStart 环境检查会打印实际加载了哪些 `.env` 文件。
+完整可配置项参考 `.env.example`。
 
 **语音在 ZCode 里不需要任何配置。** `speech_transcribe` / `speech_synthesize` 默认走官方通道，
 身份由宿主随每次 `tools/call` 注入，没有 key 可配、也没有端点要指。下面这些只对非 ZCode 宿主有意义，

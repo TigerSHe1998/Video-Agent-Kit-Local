@@ -1,6 +1,6 @@
 ---
 name: env-setup
-description: Checking and provisioning the machine's environment for the video-agent-kit plugin — probing for ffmpeg/ffprobe that actually carry the encoders and filters we render with (libx264/aac/libmp3lame, libass, libfreetype), python packages (mcp, cv2, numpy, PIL, jieba, fontTools, scenedetect) in the interpreter Claude Code really uses, a CJK font whose cmap truly covers Chinese, and which speech channel is in play (under ZCode the official channel needs no local key) — then installing what is missing (China mirrors by default) or telling the user exactly what to install. Works on macOS, Windows and Linux. Use BEFORE the first edit run on a new machine, when the session-start hook reports 缺失依赖, or whenever a tool fails in an environment-shaped way — ModuleNotFoundError, `ffmpeg not found`, `Unknown encoder 'libx264'`, `No such filter: 'subtitles'`, `no font file found for family`, 字幕烧成豆腐块/方块, speech_transcribe 超时或 401. Also use when asked to 检查环境 / 装依赖 / 配国内源 / setup / doctor.
+description: Checking and provisioning the machine's environment for the video-agent-kit plugin — probing for ffmpeg/ffprobe that actually carry the encoders and filters we render with (libx264/aac/libmp3lame, libass, libfreetype), python packages (mcp, cv2, numpy, PIL, jieba, fontTools, scenedetect) in the interpreter Claude Code really uses, a CJK font whose cmap truly covers Chinese, and which speech channel is in play (under ZCode the official channel needs no local key) — then installing what is missing (China mirrors by default) or telling the user exactly what to install. Works on macOS, Windows and Linux. Use BEFORE the first edit run on a new machine, or whenever a tool fails in an environment-shaped way — ModuleNotFoundError, `ffmpeg not found`, `Unknown encoder 'libx264'`, `No such filter: 'subtitles'`, `no font file found for family`, 字幕烧成豆腐块/方块, speech_transcribe 超时或 401. Also use when asked to 检查环境 / 装依赖 / 配国内源 / setup / doctor.
 ---
 
 # Env Setup
@@ -156,9 +156,8 @@ Notes that matter in practice:
   Chinese coverage, treat it as missing even though a path was printed.
 - **Adding a dependency to this plugin means adding a `Check` to
   `env_doctor.py` in the same change** (and to `requirements.txt`). The
-  `SessionStart` hook imports `cheap_missing()` from it, so the cheap checks are
-  the single source of truth for the startup warning — a dependency that isn't a
-  `Check` is one nobody hears about until it crashes.
+  doctor is the single source of truth for dependency diagnostics — a
+  dependency that isn't a `Check` is one nobody hears about until it crashes.
 
 ## Fonts: the one platform difference worth knowing
 

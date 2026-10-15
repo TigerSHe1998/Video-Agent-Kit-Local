@@ -146,7 +146,7 @@ def render_binding_issues(video_path: Path, video_sha: str, timeline_sha: str) -
     """preview 与 timeline 的渲染绑定校验。
 
     QC 报告里的 timeline_sha256 只是 QC 时刻 timeline 的哈希 — 渲染后改
-    timeline 不重渲染, validation/QC/Stop hook 的哈希检查全部照过, 陈旧
+    timeline 不重渲染, validation/QC 的哈希检查全部照过, 陈旧
     preview 会混过收尾契约。render_preview 落的 render_report 记录了渲染
     时刻的 timeline_sha256/output_sha256。带 timeline_path 的 QC 是 pipeline
     收尾门禁, 必须证明 preview 来自 render_preview 和当前 timeline；report
