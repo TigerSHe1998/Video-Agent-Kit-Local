@@ -132,31 +132,6 @@ def check_endpoint(env_var: str, *fallback_vars: str) -> tuple[str | None, str |
     )
 
 
-def is_allowed_host(url: str, endpoint: str | None) -> bool:
-    """True if ``url`` sits on the same origin as the configured ``endpoint``.
-
-    Audio referenced by a synthesis response may only be fetched back from the
-    endpoint we already trusted with the credentials — never from an arbitrary
-    host the response happens to name.
-    """
-    from urllib.parse import urlsplit
-
-    if not endpoint:
-        return False
-    try:
-        candidate = urlsplit(url)
-        trusted = urlsplit(endpoint)
-    except Exception:  # noqa: BLE001
-        return False
-
-    def origin(parts) -> tuple[str, str, int | None]:
-        scheme = (parts.scheme or "").lower()
-        port = parts.port if parts.port is not None else {"http": 80, "https": 443}.get(scheme)
-        return scheme, (parts.hostname or "").lower(), port
-
-    return origin(candidate) == origin(trusted)
-
-
 class RunContext:
     def __init__(self, session_kind: str = "cli") -> None:
         # "mcp" for the long-lived MCP server, "cli" for one-shot direct calls.

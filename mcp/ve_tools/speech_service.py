@@ -16,10 +16,8 @@ REMOTE_SPEECH_URL_ENV = "VE_SPEECH_MCP_URL"
 REMOTE_SPEECH_TOKEN_ENV = "VE_SPEECH_MCP_TOKEN"
 REMOTE_ASR_TRANSFER_ENV = "VE_SPEECH_MCP_ASR_TRANSFER"
 TRANSCRIBE_TOOL_ENV = "VE_SPEECH_TRANSCRIBE_TOOL"
-SYNTHESIZE_TOOL_ENV = "VE_SPEECH_SYNTHESIZE_TOOL"
 
 DEFAULT_TRANSCRIBE_TOOL = "speech_transcribe"
-DEFAULT_SYNTHESIZE_TOOL = "speech_synthesize"
 
 # The kit's own code carries no vendor names. These patterns exist for text the
 # kit does NOT author: error bodies, status messages and resource identifiers
@@ -28,7 +26,6 @@ DEFAULT_SYNTHESIZE_TOOL = "speech_synthesize"
 # which is why the vendor strings below are deliberate, not leftovers.
 _VENDOR_PATTERNS = [
     (re.compile(r"seed[_ -]?asr", re.IGNORECASE), "cloud_asr"),
-    (re.compile(r"seed[_ -]?audio", re.IGNORECASE), "cloud_tts"),
     (re.compile(r"volc(?:engine)?", re.IGNORECASE), "cloud speech service"),
     (re.compile(r"火山引擎|火山|豆包"), "cloud speech service"),
     (re.compile(r"bytedance", re.IGNORECASE), "cloud speech service"),
@@ -77,8 +74,6 @@ def remote_speech_configured() -> bool:
 def remote_tool_name(kind: str) -> str:
     if kind == "transcribe":
         return clean_env(TRANSCRIBE_TOOL_ENV) or DEFAULT_TRANSCRIBE_TOOL
-    if kind == "synthesize":
-        return clean_env(SYNTHESIZE_TOOL_ENV) or DEFAULT_SYNTHESIZE_TOOL
     return kind
 
 
@@ -238,35 +233,6 @@ def tool_result_from_remote_payload(payload: Any) -> ToolResult:
     return ToolResult(text=str(payload or "remote speech tool completed"))
 
 
-def audio_url_allowed(url: str) -> bool:
-    """Remote speech audio URLs may be fetched only from the configured remote
-    server origin. Base64 audio is preferred because it is fully self-contained."""
-    remote = clean_env(REMOTE_SPEECH_URL_ENV)
-    if not remote:
-        return False
-    try:
-        candidate = urlsplit(url)
-        configured = urlsplit(remote)
-        return (
-            (candidate.scheme or "").lower() == (configured.scheme or "").lower()
-            and (candidate.hostname or "").lower() == (configured.hostname or "").lower()
-            and effective_port(candidate) == effective_port(configured)
-        )
-    except Exception:
-        return False
-
-
-def effective_port(parts) -> int | None:
-    if parts.port is not None:
-        return parts.port
-    scheme = (parts.scheme or "").lower()
-    if scheme == "http":
-        return 80
-    if scheme == "https":
-        return 443
-    return None
-
-
 def extract_transcript_payload(data: dict[str, Any]) -> dict[str, Any] | None:
     for key in ("transcript", "transcript_payload", "payload", "result"):
         value = data.get(key)
@@ -275,14 +241,6 @@ def extract_transcript_payload(data: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(data.get("segments"), list) or isinstance(data.get("words"), list) or data.get("text"):
         return data
     return None
-
-
-def extract_audio_payload(data: dict[str, Any]) -> dict[str, Any]:
-    for key in ("audio", "audio_payload", "payload", "result"):
-        value = data.get(key)
-        if isinstance(value, dict):
-            return value
-    return data
 
 
 def scrub_secret_path(path: str | Path) -> str:

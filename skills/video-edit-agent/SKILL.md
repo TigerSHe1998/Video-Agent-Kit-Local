@@ -19,26 +19,6 @@ Use `video-edit-assembly` when the user provides multiple materials and asks to 
 
 Multi-material assembly has priority over the single-source routes below. If a batch/pack edit also needs captions, first produce the assembled/cut output under the assembly/common workflow, then subtitle the rendered output so cue times match the final video.
 
-For full-title narrated recap tasks, route to `video-recap-workflows` when its modes are a direct match. Invoke it with the same Skill tool shape and include the mode in args:
-
-| Mode | Use when |
-|---|---|
-| `movie-recap` | One full film or movie-length source should become a Chinese narrated "movie recap", "film commentary", or "几分钟看完一部电影" style video. |
-| `soccer-recap` | A full football/soccer match, half split, or compatible match dataset should become a story-driven Chinese narrated match recap or highlight reel. |
-| `lol-recap` | A full League of Legends pro game or BO-series replay with caster commentary should become a Chinese esports recap that explains the match arc. |
-| `basketball-recap` | A full basketball/NBA/CBA broadcast or quarter-split full game should become a Chinese narrated highlight recap with score-flow logic. |
-
-Examples:
-
-```json
-{"skill": "video-recap-workflows", "args": "mode=movie-recap; <user task, film path, target minutes if any, language/style constraints>"}
-{"skill": "video-recap-workflows", "args": "mode=soccer-recap; <user task, match paths or dataset roots, teams/event labels if known>"}
-{"skill": "video-recap-workflows", "args": "mode=lol-recap; <user task, game replay paths, teams/event title if known>"}
-{"skill": "video-recap-workflows", "args": "mode=basketball-recap; <user task, full-game or quarter paths, teams/event title if known>"}
-```
-
-Recap workflows have their own file contracts and usually produce `out/final.mp4` plus workflow-specific QC artifacts. Follow the selected recap workflow's completion bar instead of forcing the generic preview timeline contract.
-
 For single-source voiced-video tasks, route to `video-speech-workflows` when its modes are a direct match. Invoke it with the same Skill tool shape and include the mode in args:
 
 | Mode | Use when |
@@ -55,7 +35,7 @@ Examples:
 {"skill": "video-speech-workflows", "args": "mode=video-pipeline; <user task, source path, requested stages/features, hard constraints>"}
 ```
 
-If the task does not match a specialized route, follow the common workflow in this skill. Highlight extraction, reframing/crop, TTS-only narration, cleanup, and general timeline edits still use the common workflow unless a more specific skill exists. Record assumptions in `out/report.md`.
+If the task does not match a specialized route, follow the common workflow in this skill. Highlight extraction, reframing/crop, cleanup, and general timeline edits still use the common workflow unless a more specific skill exists. Record assumptions in `out/report.md`.
 
 Do not wait for strategy confirmation during automated data runs. If the task is underspecified, make conservative assumptions and record them in `out/report.md`.
 
@@ -156,19 +136,16 @@ For visual self-review of `out/preview.mp4`, call `video_ingest` with a separate
 - `video_ingest`: required full-video visual inspection for source videos used in edit decisions.
 - `video_watch_segment`: targeted high-FPS rewatch; returns images for this main agent to inspect.
 - `video_basic_operation`: optional deterministic source-prep tool. Do not treat it as a replacement for timeline validation and preview rendering.
-- `speech_synthesize` / `tts_generate`: use only when narration/dubbing/voiceover is required or explicitly chosen as an assumption.
 - `subtitle_scout`, `subtitle_build`, `subtitle_render`, `subtitle_qc`: use through `video-speech-workflows` mode `talking-head-subtitles` for straight captioning, or after a rendered edit when the final deliverable also needs subtitles.
 - `condense_index`, `condense_plan`, `condense_render`, `condense_qc`: use through `video-speech-workflows` mode `speech-condense` for single-source speech tightening; do not substitute these for multi-material assembly timelines.
 - `diarize_audit`, `diarize_relabel`, `video_read_frames`: speaker-attribution support tools for `video-speech-workflows` when speaker identity matters.
-- `detect_shots`, `arrange_footage`, `synthesize_narration`, `bind_narration`, `render_narrated`: use through `video-recap-workflows` mode `movie-recap` for full-film narrated recap pipelines.
-- `soccer_ingest`, `soccer_arrange`, `soccer_tts`, `soccer_render`: use through `video-recap-workflows` mode `soccer-recap` for full football/soccer narrated match recaps.
-- `lol_ingest`, `lol_arrange`, `lol_tts`, `lol_render`: use through `video-recap-workflows` modes `lol-recap` and `basketball-recap` for full-game narrated esports or basketball recaps.
+- `detect_shots`: deterministic shot-boundary timeline for edit planning; cache-aware.
 - `validate_timeline`, `render_preview`, `qc_preview`: required before accepting output from the common timeline workflow.
 - `timeline_diff`: required for repair-loop auditability.
 
 ## Completion Bar
 
-For tasks routed to `video-edit-assembly`, `video-speech-workflows`, or `video-recap-workflows`, use the selected specialized skill's additional or replacement completion bar. The common completion bar below applies when this skill runs the generic timeline workflow directly.
+For tasks routed to `video-edit-assembly` or `video-speech-workflows`, use the selected specialized skill's additional or replacement completion bar. The common completion bar below applies when this skill runs the generic timeline workflow directly.
 
 The task is complete only when:
 

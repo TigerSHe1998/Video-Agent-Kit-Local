@@ -1,10 +1,10 @@
-"""zcode_speech: 走 ZCode 官方 Server MCP 的 ASR / TTS provider。
+"""zcode_speech: 走 ZCode 官方 Server MCP 的 ASR provider。
 
 端点：``POST {ZCODE_BASE_URL}/api/v1/mcp/server/video_edit``（Streamable HTTP MCP，
-stateless），工具 ``speech_transcribe`` / ``speech_synthesize``。鉴权不由本插件持有：
+stateless），工具 ``speech_transcribe``。鉴权不由本插件持有：
 身份头随每次 ``tools/call`` 的 ``_meta`` 由 ZCode 宿主下发，见 ve_tools/official_auth.py。
 
-与直连 HTTP 的兼容通道（cloud_asr / tts.py 的 cloud_tts）相比，这里没有任何 API key：用户只要
+与直连 HTTP 的兼容通道（cloud_asr）相比，这里没有任何 API key：用户只要
 登录 ZCode 且持有 Coding Plan 即可用，配额与计费由服务端统一管。
 
 四个实现上必须记住的服务端事实（都核过源码，改动前先复核）：
@@ -44,7 +44,6 @@ from .cloud_asr import language_sanity_warning, prepare_asr_audio
 
 MCP_PATH = "/api/v1/mcp/server/video_edit"
 TOOL_TRANSCRIBE = "speech_transcribe"
-TOOL_SYNTHESIZE = "speech_synthesize"
 PROVIDER = "zcode_speech"
 
 # 请求体预算。**卡点是入口 nginx，不是 go-sdk。**
@@ -148,7 +147,7 @@ def official_auth_of(ctx: Any) -> OfficialAuth | None:
 
 
 def zcode_speech_status(ctx: Any) -> dict[str, Any]:
-    """{available, reasons, ...}，与 cloud_asr_status() / cloud_tts_status() 同构，
+    """{available, reasons, ...}，与 cloud_asr_status() 同构，
     供 provider 选择与能力探测复用。三种不可用要能被分辨，否则用户不知道该去登录还是去升级套餐。"""
     reasons: list[str] = []
     origin, origin_error = zcode_api_origin()
@@ -566,58 +565,3 @@ def _segment(item: Any) -> dict[str, Any] | None:
         "end": _number(item.get("end")) or 0.0,
         "words": words,
     }
-
-
-# ── speech_synthesize ────────────────────────────────────────────────────────
-
-
-def synthesize_arguments(
-    *,
-    text: str,
-    output_format: str,
-    voice: str,
-    speed: float,
-    speech_rate: int,
-    pitch_rate: int,
-    loudness_rate: int,
-    sample_rate: int,
-    model: str,
-    style_instructions: str,
-    sample_mode: bool,
-) -> dict[str, Any]:
-    """服务端 SpeechSynthesizeRequest 的 11 个字段全部显式填齐（全为 required）。"""
-    return {
-        "text": text,
-        "output_format": output_format,
-        "voice": voice,
-        "speed": speed,
-        "speech_rate": speech_rate,
-        "pitch_rate": pitch_rate,
-        "loudness_rate": loudness_rate,
-        "sample_rate": sample_rate,
-        "model": model,
-        "style_instructions": style_instructions,
-        "sample_mode": sample_mode,
-    }
-
-
-def write_synthesized_audio(data: dict[str, Any], output_path: Path) -> Path | ToolResult:
-    audio_b64 = data.get("audio_base64")
-    if not isinstance(audio_b64, str) or not audio_b64.strip():
-        return ToolResult(
-            text="[ERROR] zcode_speech TTS response contained no audio_base64",
-            data={
-                "provider": PROVIDER,
-                "output_path": str(output_path),
-                "response_keys": sorted(data.keys()),
-                "retryable": True,
-            },
-        )
-    try:
-        output_path.write_bytes(base64.b64decode(audio_b64))
-    except Exception as exc:  # noqa: BLE001
-        return ToolResult(
-            text=f"[ERROR] zcode_speech TTS returned invalid base64 audio: {exc}",
-            data={"provider": PROVIDER, "output_path": str(output_path), "retryable": False},
-        )
-    return output_path

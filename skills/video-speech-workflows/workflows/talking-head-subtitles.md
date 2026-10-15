@@ -211,7 +211,6 @@ Write `out/report.md`: the task, the style chosen and why, transcript correction
 - `subtitle_render` — burn-in and/or soft mux; regenerates the ASS from the JSON every time.
 - `subtitle_qc` — required before accepting; its evidence frames are a required read.
 - `render_preview` / `validate_timeline` / `timeline_diff` — only when the task also involves *cutting* the video. Straight captioning of one continuous clip needs no timeline. If you do cut first, subtitle the rendered cut, not the source, or every cue time will be wrong.
-- `speech_synthesize` / `tts_generate` — not part of this task.
 
 ## Completion Bar
 

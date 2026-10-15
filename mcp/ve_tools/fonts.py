@@ -209,7 +209,7 @@ def find_cjk_font(weight: str = "regular") -> str | None:
     """A concrete CJK-capable font file, or None if the machine has none.
 
     Never guesses a path that does not exist: callers that need a hard failure
-    (lol/soccer rendering) can raise on None, and the doctor reports it as a
+    (subtitle burn-in) can raise on None, and the doctor reports it as a
     missing requirement with a per-platform install command.
     """
     return _find_cjk_font((weight or "regular").lower(),

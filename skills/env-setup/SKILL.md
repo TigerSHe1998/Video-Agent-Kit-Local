@@ -33,22 +33,21 @@ for **the current OS**. This table is only for judging *impact*:
 
 | Requirement | Dead without it |
 |---|---|
-| Python ≥ 3.10, and `mcp` (1.x), `requests`, `opencv-python-headless`, `numpy`, `pillow`, `jieba`, `fonttools`, `scenedetect` in **that same interpreter** | `mcp` → every tool (server won't start); requests → `transcribe` + all TTS; cv2/numpy/PIL → `video_ingest`, contact sheets, `qc_preview` scans, i.e. all visual evidence; jieba → `subtitle_build` line breaking; fontTools → the pre-render tofu check; scenedetect → recap shot boundaries |
+| Python ≥ 3.10, and `mcp` (1.x), `requests`, `opencv-python-headless`, `numpy`, `pillow`, `jieba`, `fonttools`, `scenedetect` in **that same interpreter** | `mcp` → every tool (server won't start); requests → `transcribe`; cv2/numpy/PIL → `video_ingest`, contact sheets, `qc_preview` scans, i.e. all visual evidence; jieba → `subtitle_build` line breaking; fontTools → the pre-render tofu check; scenedetect → `detect_shots` shot boundaries |
 | `ffmpeg` + `ffprobe` on PATH, **with libx264 / aac / libmp3lame** | ingestion and probing (Phase 1 can't start); missing encoder = the render dies at the last step, after everything upstream was paid for |
-| that ffmpeg **built with libass + libfreetype** (`subtitles`/`ass`/`drawtext` filters) | subtitle burn-in, title cards, score bugs — the recap deliverable |
+| that ffmpeg **built with libass + libfreetype** (`subtitles`/`ass`/`drawtext` filters) | subtitle burn-in and title cards |
 | a **CJK font whose cmap really covers Chinese** | Chinese subtitles/titles. This one fails *silently* — see the tofu warning above |
 | cloud ASR credentials or Speech MCP access | `speech_transcribe`; without it there is no transcript, so every speech-driven decision is guesswork. **Under ZCode this is never a gap** — see below |
-| cloud TTS credentials or Speech MCP access | narration/dubbing (`speech_synthesize`, `tts_generate`, `*_tts`). Edit-only and subtitle-only tasks survive without it |
 
 ### Speech needs no local key under ZCode
 
-Transcription and synthesis default to the **official channel**, which authenticates
+Transcription defaults to the **official channel**, which authenticates
 with identity the ZCode host injects into each `tools/call`. There is nothing to
 configure, nothing to install, and no key to obtain. Two consequences:
 
-- **Never tell the user to set an ASR/TTS key to get transcription working**, and
-  never treat a "credentials not set" line as a blocker. The doctor reports these
-  two rows as `官方通道` whenever `ZCODE_BASE_URL` is present, and both rows are
+- **Never tell the user to set an ASR key to get transcription working**, and
+  never treat a "credentials not set" line as a blocker. The doctor reports this
+  row as `官方通道` whenever `ZCODE_BASE_URL` is present, and the row is
   soft (`只降级不致命`) in every case.
 - The doctor runs as its **own process**, so it cannot see the per-call identity
   headers — only whether the official channel exists at all. A *specific* call
@@ -192,7 +191,7 @@ code change, and not `sudo cp` into `/usr/share/fonts`.
   holds the last verdict.
 - Proceeding into a render or a recap with ffmpeg missing libass, letting it
   surface as a mysterious tool error twenty rounds later.
-- **Asking the user for an ASR/TTS key.** Under ZCode there is no key to give;
+- **Asking the user for an ASR key.** Under ZCode there is no key to give;
   the doctor's speech rows say `官方通道` and a failing call reports whether it is
   a login or a plan problem. Chasing a key wastes the user's turn and fixes nothing.
 - Blaming the plugin for `speech_transcribe` timeouts before checking which

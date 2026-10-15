@@ -274,7 +274,6 @@ Also carry over what the survey told you about cut-time behaviour: burned-in sou
 - `validate_timeline` — optional cross-check on `out/condense_timeline.json`; it independently confirms every clip sits inside the source. It is not a substitute for QC.
 - `render_preview` / `qc_preview` / `timeline_diff` — the general editing line. Not needed here; `condense_render` does the cutting.
 - `subtitle_*` — only if the task also asks for captions, and only on the condensed output.
-- `speech_synthesize` / `tts_generate` — not part of this task. Condensing means removing the speaker's words, never re-voicing them.
 
 ## Completion Bar
 

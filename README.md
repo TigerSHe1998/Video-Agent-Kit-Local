@@ -1,6 +1,6 @@
 # video-agent-kit
 
-`video-agent-kit` 是自动化视频剪辑工具包。它把视频剪辑需要的特殊能力封装成 MCP 工具和 CLI：媒体探查、标准云端语音转录与合成、完整视频抽帧观察、局部高 fps 复看、基础视频操作、timeline 校验、预览渲染、QC 和可审计修复。
+`video-agent-kit` 是自动化视频剪辑工具包。它把视频剪辑需要的特殊能力封装成 MCP 工具和 CLI：媒体探查、标准云端语音转录、完整视频抽帧观察、局部高 fps 复看、基础视频操作、timeline 校验、预览渲染、QC 和可审计修复。
 
 ## 设计边界
 
@@ -16,7 +16,6 @@
 - `video_ingest`：完整视频抽帧并返回 contact sheet，必须先跑；Claude Code 主 Agent 自己看图并形成理解。显式传入的 `transcript_path` 必须存在；不传 transcript 才表示允许无转录观察；在同一个 MCP 会话里，如果重新观察此前已绑定过 transcript 的同一视频指纹，会复用该视频对应的 transcript。同一路径的视频文件如果被覆盖或替换，必须重新调用 `video_ingest`。只有成功产出 observation package 后，工具才会把该视频记为已 full-ingest；抽帧失败不会推进会话状态。
 - `video_watch_segment`：局部高 fps 复看；单窗口用 `start_time/end_time/fps`，多窗口用 `segments=[{start,end}, ...]` + `fps`，返回片段 contact sheet 和匹配转录。显式传 `video_path` 可直接复看任意存在的视频，不要求先跑完整 `video_ingest`。不带 `video_path` 时默认使用会话里的 active video；如果 active 文件被覆盖或替换，隐式复看会报错并要求显式传当前 `video_path` 或重新 `video_ingest`。显式传入的 `transcript_path` 必须存在；在同一个 MCP 会话里，如果显式传入此前已绑定过 transcript 的同一视频指纹且未传 transcript 参数，会复用该视频对应的 transcript。非数字时间参数会返回结构化错误；明显超过视频时长的窗口会报错，不会静默截断成较短观察。窗口台账按 `(start, end, fps)` 判重：只有时间和 fps 都相同的窗口才会被跳过，换一个 fps 重看同一窗口是新的观察；确有需要时可传 `force=true` 跳过判重。只有成功产出新 contact sheet 后，局部复看才会更新 active-video 会话状态；抽帧失败或 `skipped_duplicate` 不算新的视觉证据，多窗口部分失败时整体结果会带 `[ERROR]` 前缀汇总。
 - `video_basic_operation`：OpenChatCut 风格的确定性基础操作封装，支持 `trim`、`splice`、`speed`、`crop`、`scale`、`rotate`、`flip`、`freeze_frame`。它适合源素材预处理或单步变换；timeline 成片仍应走 `validate_timeline` / `render_preview`。
-- `speech_synthesize`：标准语音合成工具。配置 `VE_SPEECH_MCP_URL` 时调用远端 HTTP MCP；未配置时，在 ZCode 中优先使用宿主注入身份的官方通道，其他宿主回退到本地兼容后端。对外统一为 `cloud_tts`；`allowed_providers` 提供时是硬白名单。并发限制、限流、网络和服务端瞬时错误默认额外重试 3 次，可用 `retries` / `retry_count` 和 `retry_backoff_seconds` 覆盖；参数错误、缺凭据、格式不支持不会重试。`speed` 会映射为 `speech_rate`，也可显式传 `speech_rate` / `pitch_rate` / `loudness_rate` / `sample_rate` / `output_format`，本工具只暴露可被 ffprobe 稳定校验的 `wav` / `mp3` / `ogg_opus` 输出，并拒绝 `output_path` 后缀与 `output_format` 不一致。`tts_generate` 保留为兼容 alias。
 - `validate_timeline`：校验 timeline 项目 JSON；依赖 ffprobe 检查源素材时长边界，时长优先读 format duration，缺失时回退到 stream duration，且同一源文件的时长探测会缓存。除了旧版线性 `clips[]`，也支持更接近剪辑软件项目文件的 `project` / `sequence` / `output_canvas` / `assets` / `tracks` / `markers` / `transitions` / clip effects 元数据校验。`tracks[]` timeline 中非视频轨的 clip（字幕 / overlay / callout 计划）可以用非空 `text` 代替媒体 `source`；视频 / main 轨 clip 和顶层 `clips[]` 仍必须有 `source`。
 - `render_preview`：用 FFmpeg / ffprobe 渲染预览；render report 会记录 timeline hash 和 output hash。顶层 `clips[]` 仍按 legacy/debug 线性拼接渲染；项目式 `tracks[]` 会按 sequence 画布和 `timeline_start` 编译成基础多轨预览：主视频铺到画布并在片尾补少量末帧降低边界闪帧，源视频音频与 `audio/music/voiceover` 轨先烘焙成全片长度、已按时间线定位的 wav bed，再非归一化混音，`subtitle/text` 轨用 `drawtext` 烧录，`overlay/image` 轨按启用窗口叠加。父轨道没有 `type/name/track_type` 时不会被默认当作主视频轨；未知 track 类型会记录到 render plan 的 unsupported tracks 中，而不是声称完整渲染。
 - `qc_preview`：硬性质量检查，包括容器、黑帧、短编辑边界黑帧、静音、冻结帧、音量、音频覆盖时长和空文件；媒体探测失败或显式传入的 `timeline_path` 不存在时直接报错，黑帧 / 静音 / 冻结 / 音量扫描失败会作为 QC error 写入报告。静音和音量扫描只在存在音轨时运行；完全没有音轨的成片会记一条 warning（整片无声），不会静默通过。
@@ -24,9 +23,7 @@
 
 默认文件契约为 `out/media.json`、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和 `out/report.md`。其中 `out/transcript.json` 是 cloud ASR 可用时的预期产物；如果 cloud ASR 不可用，应在 `out/report.md` 记录限制并继续完成其余闭环。单素材任务可使用 `out/video_ingest.json`；多素材任务可以显式传 `output_json` 写到 `out/ingest/*.json` 或 `out/video_ingest_<source>.json`，并在 `out/media.json` 汇总。
 
-`video-recap-workflows` 覆盖完整电影、足球、LoL 和篮球解说剪辑。电影解说使用 `detect_shots` / `arrange_footage` / `synthesize_narration` / `bind_narration` / `render_narrated`；足球使用 `soccer_ingest` / `soccer_arrange` / `soccer_tts` / `soccer_render`；LoL 与篮球复用 `lol_ingest` / `lol_arrange` / `lol_tts` / `lol_render`。这些流程通常产出 `out/final.mp4` 和 workflow-specific QC，而不是通用 `out/preview.mp4`。
-
-`out/media.json` 保留给源素材探测。`qc_preview` 和 `tts_generate` 内部做媒体探测时会写 `out/preview_media.json`、`out/tts_*_media.json` 这类 sidecar，不覆盖源素材 metadata。`validate_timeline` 和 `qc_preview` 会在报告中写入文件 hash；收尾前必须核对这些 hash 以拒绝已经过期的 validation / QC report（由 `video-edit-agent` skill 的完成门负责，不再依赖 hook）。
+`out/media.json` 保留给源素材探测。`qc_preview` 内部做媒体探测时会写 `out/preview_media.json` 这类 sidecar，不覆盖源素材 metadata。`validate_timeline` 和 `qc_preview` 会在报告中写入文件 hash；收尾前必须核对这些 hash 以拒绝已经过期的 validation / QC report（由 `video-edit-agent` skill 的完成门负责，不再依赖 hook）。
 
 `schemas/video_observation.schema.json` 对应工具真实落盘的 observation package，即 `video_ingest` / `video_watch_segment` 生成的帧清单、sheet 清单、媒体元数据、抽帧参数和匹配转录。模型读图后的主观摘要、候选片段和风险判断应写入 `out/report.md` 或后续独立的 review 文件，不写回这个工具产物 schema。
 
@@ -41,14 +38,12 @@ skills/env-setup/SKILL.md
 skills/video-edit-agent/SKILL.md
 skills/video-edit-assembly/SKILL.md
 skills/video-speech-workflows/SKILL.md
-skills/video-recap-workflows/SKILL.md
 ```
 
 `video-edit-agent` 是总控入口，负责素材发现、任务分类、通用文件契约、timeline
 验证、渲染、QC 和修复闭环；`video-edit-assembly` 是多素材组装成片子流程，
 用于多段视频/音频/图片素材的分组、选择、去重、排序和成片结构规划；
-`video-speech-workflows` 处理单源语音压缩和字幕；`video-recap-workflows`
-处理完整电影/赛事/比赛回放的解说剪辑；`env-setup` 只管环境（体检 + 装依赖，
+`video-speech-workflows` 处理单源语音压缩和字幕；`env-setup` 只管环境（体检 + 装依赖，
 跨 macOS / Windows / Linux），不碰剪辑任务。
 
 首次使用前装环境（推荐走体检脚本，它跨 macOS / Windows / Linux 且默认用国内镜像）：
@@ -83,7 +78,7 @@ python3 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-deps "sc
 
 MCP 工具调用的 `arguments` 顶层必须是 JSON object；如果入口传入数组、字符串等非对象参数，server 会直接返回结构化错误，不把异常泄漏成工具 traceback。
 
-本插件不注册任何会话 hook，收尾与流程纪律全部由 skill 文档约束。环境检查走 `/env-check`（对应 `env-setup` skill，跨 macOS / Windows / Linux，默认用国内镜像）。TTS 调用依赖按需懒加载；缺 TTS 依赖只应影响 `speech_synthesize` / `tts_generate`，不应影响媒体探测、抽帧、timeline、渲染和 QC。剪辑任务的标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；收尾前按 `video-edit-agent` 的文件契约自查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环；recap 任务改查 recap 合同（最终视频、绑定/QC 报告、TTS 忠实度、句画抽查和 `out/report.md`）。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不触发契约。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
+本插件不注册任何会话 hook，收尾与流程纪律全部由 skill 文档约束。环境检查走 `/env-check`（对应 `env-setup` skill，跨 macOS / Windows / Linux，默认用国内镜像）。剪辑任务的标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；收尾前按 `video-edit-agent` 的文件契约自查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不触发契约。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
 
 推荐工作流：
 
@@ -91,7 +86,6 @@ MCP 工具调用的 `arguments` 顶层必须是 JSON object；如果入口传入
 video-edit-agent classify
   -> video-edit-assembly       # 多素材组装成片任务
   -> video-speech-workflows    # 单源语音压缩、说话人字幕、speech pipeline
-  -> video-recap-workflows     # 电影/足球/LoL/篮球解说剪辑
   -> inspect_media
   -> transcribe
   -> video_ingest           # 一次性把完整视频变成可看的 contact sheet，附带完整转录
@@ -116,27 +110,20 @@ video-edit-agent classify
 
 完整可配置项参考 `.env.example`。
 
-**语音在 ZCode 里不需要任何配置。** `speech_transcribe` / `speech_synthesize` 默认走官方通道，
+**语音转录在 ZCode 里不需要任何配置。** `speech_transcribe` 默认走官方通道，
 身份由宿主随每次 `tools/call` 注入，没有 key 可配、也没有端点要指。下面这些只对非 ZCode 宿主有意义，
-`/env-check` 里这两项也永远是 soft，不是硬缺口。
+`/env-check` 里这项也永远是 soft，不是硬缺口。
 
 必须或高价值配置：
 
 - `VE_SPEECH_MCP_URL` / `VE_SPEECH_MCP_TOKEN`：Claude Code 等非 ZCode 宿主可配置的远端 HTTP MCP 语音服务，也是这类宿主的推荐做法（付费能力与凭据都留在服务端）。ZCode 清单不暴露这两个用户配置。显式设置 URL 时远端 MCP 优先级最高；`VE_SPEECH_MCP_ASR_TRANSFER=auto|path|base64` 控制 ASR 媒体传输，默认对 localhost/shared-storage 走路径，对非本机远端抽取压缩音频后 base64 上传。
 - `VE_ASR_PROVIDER`：`speech_transcribe` / `transcribe` 的 provider 选择，`auto`（默认）/ `cloud_asr`。
 - 直连 HTTP 兼容后端（legacy escape hatch，自带语音服务时才用）：插件不内置任何服务地址、模型名或资源标识，全部由部署方提供。
-  - `VE_SPEECH_ASR_ENDPOINT` / `VE_SPEECH_TTS_ENDPOINT` **只从进程环境读，不吃 `.env`**：项目级 `.env` 是不可信输入，若它能指定端点，仓库里的一个 `.env` 就能把带着 API key 的请求导向攻击者主机。请在启动 server 的地方 export。
+  - `VE_SPEECH_ASR_ENDPOINT` **只从进程环境读，不吃 `.env`**：项目级 `.env` 是不可信输入，若它能指定端点，仓库里的一个 `.env` 就能把带着 API key 的请求导向攻击者主机。请在启动 server 的地方 export。
   - `VE_SPEECH_ASR_RESOURCE_ID`（必填）、`VE_SPEECH_ASR_FLASH_RESOURCE_ID`（可选，同步回退资源）。
   - `VE_SPEECH_ASR_API_KEY`，或 `VE_SPEECH_ASR_APP_KEY` + `VE_SPEECH_ASR_ACCESS_KEY`。
-  - `VE_SPEECH_TTS_MODEL`（必填）、`VE_SPEECH_TTS_API_KEY`（未配置时复用 ASR key）、`VE_SPEECH_TTS_VOICE`。
-- `VE_NARRATION_TTS_PROVIDER` / `VE_NARRATION_TTS_VOICE` / `VE_NARRATION_TTS_RATE`：`synthesize_narration` 的用户级默认 cloud TTS 后端、音色和语速。
-- `VE_LOL_TTS_PROVIDER` / `VE_LOL_TTS_VOICE`：`lol_tts` 的默认 cloud TTS 后端和音色。
-- `VE_SOCCER_TTS_PROVIDER` / `VE_SOCCER_TTS_VOICE`：`soccer_tts` 的默认 cloud TTS 后端和音色。
-- `VE_BGM_DIR`：`render_narrated` 可选 BGM 曲库目录；当前 movie-recap skill 默认 `bgm=false`，未配置时不会阻塞无 BGM 成片。
 
-`speech_transcribe` 和 `speech_synthesize` 都支持 `retries` / `retry_count` 表示瞬时错误的额外重试次数，默认 3，范围 0~10；`retry_backoff_seconds` 是指数退避初始秒数，`speech_transcribe` 默认 30 秒，`speech_synthesize` 默认 3 秒。只重试网络、timeout、429/5xx、服务端错误、并发/限流等瞬时失败；缺 key、provider 不可用、输入/参数错误不会重试。
-
-`speech_synthesize` 的 `preferred_provider` 必须是 `auto`、`cloud` 或 `cloud_tts`；未知值会直接返回结构化错误。`allowed_providers` 是硬白名单，提供时只能包含通用 cloud TTS provider；错误类型或未知 provider name 会直接返回结构化错误。`sample_mode` 提供时必须是 boolean，不能用字符串 `"false"` / `"true"` 代替。`speed` 必须是有限正数。TTS 额外参数中，`speech_rate` 必须在 `[-50,100]`，`pitch_rate` 必须在 `[-12,12]`，`loudness_rate` 必须在 `[-50,100]`，`sample_rate` 必须是接口支持的采样率，`output_format` 必须是 `wav` / `mp3` / `ogg_opus`。TTS 音频生成后必须能被 `ffprobe` 探测到有效正数时长，否则工具会返回错误，避免把未知时长的旁白写进 timeline。
+`speech_transcribe` 支持 `retries` / `retry_count` 表示瞬时错误的额外重试次数，默认 3，范围 0~10；`retry_backoff_seconds` 是指数退避初始秒数，默认 30 秒。只重试网络、timeout、429/5xx、服务端错误、并发/限流等瞬时失败；缺 key、provider 不可用、输入/参数错误不会重试。
 
 ## CLI 使用
 

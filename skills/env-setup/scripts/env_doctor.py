@@ -231,7 +231,7 @@ def probe_ffmpeg_encoders() -> tuple[bool, str]:
     if not text:
         return False, "ffmpeg -encoders 无输出"
     want = {"libx264": "预览/成片视频编码", "aac": "成片音频编码",
-            "libmp3lame": "TTS/BGM 中间件 mp3"}
+            "libmp3lame": "音频中间件 mp3"}
     miss = [f"{k}({v})" for k, v in want.items() if k not in text]
     if miss:
         return False, "缺编码器: " + ", ".join(miss)
@@ -305,12 +305,6 @@ def probe_asr() -> tuple[bool, str]:
     return _status_line("cloud_asr", "cloud_asr_status", ("auth_mode",))
 
 
-def probe_tts() -> tuple[bool, str]:
-    if under_zcode_host():
-        return True, "官方通道 (宿主注入身份, 本地无需配置 key)"
-    return _status_line("tts", "cloud_tts_status", ("model", "auth_mode"))
-
-
 def probe_speech_net() -> tuple[bool, str]:
     """直连兼容端点的出网可达性。
 
@@ -373,7 +367,7 @@ def probe_disk() -> tuple[bool, str]:
 
 # ── 检查清单 (顺序即展示顺序) ────────────────────────────────────────────────
 PY_MODULES = [
-    ("requests", "requests>=2.31.0", "cloud ASR / cloud TTS 的 HTTP 调用 — 缺则转录和 TTS 全废"),
+    ("requests", "requests>=2.31.0", "cloud ASR 的 HTTP 调用 — 缺则转录不可用"),
     ("cv2", "opencv-python-headless>=4.8.0,<5.0.0", "video_ingest 抽帧 / 局部复看 / QC 扫描"),
     ("numpy", "numpy>=1.24.0", "抽帧索引与帧差计算"),
     ("PIL", "pillow>=10.0.0", "contact sheet 拼图 (模型能看到的那张图)"),
@@ -501,20 +495,6 @@ CHECKS: list[Check] = [
                "#   export VE_SPEECH_ASR_RESOURCE_ID=<resource id>",
                "#   VE_SPEECH_ASR_API_KEY=<你的 key>",
                f"# 完整可配置项见 {PLUGIN_ROOT / '.env.example'}; 不要把 key 写进 .env.example"],
-          needs="py-requests", soft=True),
-    Check("tts-cred", "语音合成通道", "speech_synthesize / 解说旁白合成 — recap 类任务的必需项",
-          probe_tts,
-          need="ZCode 中无需配置 (宿主注入身份); 其他宿主需远端 Speech MCP, "
-               "或直连兼容后端 VE_SPEECH_TTS_ENDPOINT + MODEL + API_KEY",
-          fix=["# 在 ZCode 中运行时无需任何配置",
-               f"# 其他宿主 —— 同上, 写进 {PLUGIN_ROOT / '.env'}:",
-               "#   VE_SPEECH_MCP_URL=<remote MCP URL>",
-               "#   VE_SPEECH_MCP_TOKEN=<token>",
-               "# 或自带直连服务:",
-               "#   export VE_SPEECH_TTS_ENDPOINT=<https endpoint>",
-               "#   VE_SPEECH_TTS_MODEL=<model>",
-               "#   VE_SPEECH_TTS_API_KEY=<你的 key>",
-               "# 只做剪辑/字幕、不做配音的任务可以先不管这项"],
           needs="py-requests", soft=True),
     Check("speech-net", "直连兼容端点可达", "只在自带直连语音服务时适用",
           probe_speech_net,
