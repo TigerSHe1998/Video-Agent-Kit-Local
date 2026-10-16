@@ -18,7 +18,7 @@ You are the global controller for video editing tasks. Match the user's editing 
 
 Start here for every video-edit task. Classify the task before detailed planning.
 
-Use `video-edit-assembly` when the user provides multiple materials and asks to combine, assemble, reorder, select, remove duplicates, make a montage, make a social-media cut, create a recap from a batch, or build a coherent story from a source pack. Invoke the Skill tool with:
+Use `video-edit-assembly` when the user provides multiple materials and asks to combine, assemble, reorder, select, remove duplicates, make a montage, make a social-media cut, create a highlights reel from a batch, or build a coherent story from a source pack. Invoke the Skill tool with:
 
 ```json
 {"skill": "video-edit-assembly", "args": "<user task, material assumptions, hard constraints>"}

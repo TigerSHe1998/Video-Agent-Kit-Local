@@ -623,8 +623,8 @@ def check_transition_object(value: object, label: str, issues: list[dict[str, An
     if not isinstance(value, dict):
         issues.append({"severity": "error", "message": f"{label} must be an object"})
         return
-    if not str(value.get("type") or value.get("name") or "").strip():
-        issues.append({"severity": "error", "message": f"{label} needs type/name"})
+    if not str(value.get("type") or value.get("kind") or value.get("name") or "").strip():
+        issues.append({"severity": "error", "message": f"{label} needs type/kind/name"})
     check_positive_number(value.get("duration"), f"{label}.duration", issues)
 
 

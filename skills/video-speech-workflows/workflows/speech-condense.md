@@ -252,7 +252,7 @@ Write `out/report.md`: the task, the target and whether it was met, what was dro
 
 ## Also Subtitling?
 
-Condense first, then subtitle the **rendered condensed cut** — subtitling the source and then cutting puts every cue at the wrong time. `condense_plan` writes `out/condensed_transcript.json`, the transcript remapped into output time with word timings preserved, so the subtitle pass does not need a second ASR run. Check its `partial=true` segments first: a unit split by a cut appears twice.
+Condense first, then subtitle the **rendered condensed cut** — subtitling the source and then cutting puts every cue at the wrong time. `condense_plan` writes `out/condensed_transcript.json`, the transcript remapped into output time with its derived unit timings preserved (segment-level only with the local ASR), so the subtitle pass does not need a second ASR run. Check its `partial=true` segments first: a unit split by a cut appears twice.
 
 **First check whether the source already has burned-in captions.** The visual survey's thumbnail sheet shows this, and it is the thing to look for before agreeing to subtitle at all. If the source carries its own burned-in text, the condensed cut carries it too — so adding a second caption track **double-prints**: two sets of text at nearly the same height, overlapping into something illegible. Verified on a real interview: `broadcast` margins landed the new cues directly on top of the source's existing captions, and the QC evidence frames showed the two texts garbling each other.
 

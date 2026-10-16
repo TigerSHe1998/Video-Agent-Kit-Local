@@ -2331,7 +2331,12 @@ def condense_qc(args: dict, ctx: RunContext) -> ToolResult:
 
     if video_path.stat().st_size == 0:
         add("error", "output file is empty")
-    if render_report and render_report.get("plan_sha256") not in (None, file_sha256(plan_path)):
+    if not render_report:
+        # hash 绑定校验依赖 render report; 缺失时无法证明产物来自当前 plan,
+        # 至少要留痕 (qc_preview 对同类缺失判 error; 这里降为 warning, 因为
+        # 时长/波形等其余检查仍可执行)
+        add("warning", "render report missing or unreadable; plan-to-output hash binding not verified")
+    elif render_report.get("plan_sha256") not in (None, file_sha256(plan_path)):
         add(
             "error",
             "the render report was produced from a different plan than the one given here; re-render, or pass the "

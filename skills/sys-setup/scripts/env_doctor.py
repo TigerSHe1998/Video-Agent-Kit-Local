@@ -237,7 +237,7 @@ def probe_font() -> tuple[bool, str]:
     if covered is False:
         return False, f"{d['regular']}{tail}"
     if covered is None:
-        # venv 里 fontTools 缺失 → 覆盖度未知, 但文件在, 不当缺口 (py-fontTools 那项会报)
+        # venv 里 fontTools 缺失 → 覆盖度未知, 但文件在, 不当缺口 (依赖由 bootstrap 自动管)
         return True, f"{d['regular']}{tail} (覆盖度未验证: 缺 fontTools)"
     return True, f"{d['regular']}{tail}"
 

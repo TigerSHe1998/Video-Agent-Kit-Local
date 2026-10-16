@@ -105,7 +105,34 @@ def _autosplit_value(override: Any) -> int:
     return max(0, min(180, minutes))
 
 
-def _relocate_job_outputs(input_path: Path, work_dir: Path) -> list[Path]:
+def _snapshot_preexisting(input_path: Path) -> dict[str, int]:
+    """转录前对输入目录里的同名产物候选做 mtime 快照。
+
+    只按文件名模式无法区分"CLI 本次刚写的产物"与"用户本来就放在视频旁的
+    同名 JSON"（如手写笔记 interview.json）—— 不做快照会把用户文件一并搬进
+    .video_agent。快照后只搬移 mtime 变化/新增的候选。
+    """
+    stem = input_path.stem
+    prefix = f"{stem}."
+    snapshot: dict[str, int] = {}
+    try:
+        for p in input_path.parent.iterdir():
+            name = p.name
+            if name == f"{stem}.json" or (
+                name.startswith(prefix) and "of" in name and name.endswith(".json")
+            ):
+                try:
+                    snapshot[name] = p.stat().st_mtime_ns
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return snapshot
+
+
+def _relocate_job_outputs(
+    input_path: Path, work_dir: Path, preexisting: dict[str, int] | None = None,
+) -> list[Path]:
     """把 CLI 写在输入文件旁的 job JSON 移进 work_dir（按段序升序）。
 
     transcribe CLI 把产物硬编码写在输入的父目录 (无 --output-dir 参数); 方案 B
@@ -113,18 +140,41 @@ def _relocate_job_outputs(input_path: Path, work_dir: Path) -> list[Path]:
     .video_agent 是不可接受的), CLI 结束后立刻把产物**移动**过来, 让用户目录
     不留任何残留。失败/超时路径同样调用本函数做清扫。
 
+    ``preexisting`` 是 :func:`_snapshot_preexisting` 的转录前快照: 只搬移本次
+    新写 (快照中不存在) 或被覆写 (mtime 变化) 的候选 —— 用户预置的同名 JSON
+    原地不动, 也不会被当成本次产物解析。
+
     返回移动后的 job JSON 列表 (空 = CLI 没写产物)。移动失败时回退为复制并
     删源 —— 复制的是几 KB 的 JSON, 不是媒体文件。不用 glob: stem 含
     ``[ ] * ?`` 等字符时 glob 模式会失配/误配。
     """
     stem = input_path.stem
     parent = input_path.parent
+    # staging 模式 (产物本就在 work_dir): 不能走 os.replace —— target == src 时
+    # target.unlink() 会先把源删掉再替换, 文件直接蒸发 (实测踩坑)。同目录只需原样收集。
+    if parent == work_dir:
+        return [
+            p for p in parent.iterdir()
+            if p.name == f"{stem}.json"
+            or (p.name.startswith(f"{stem}.") and "of" in p.name and p.name.endswith(".json"))
+        ]
     prefix = f"{stem}."
     candidates = [
         p for p in parent.iterdir()
         if p.name == f"{stem}.json"
         or (p.name.startswith(prefix) and "of" in p.name and p.name.endswith(".json"))
     ]
+    if preexisting:
+        kept: list[Path] = []
+        for p in candidates:
+            try:
+                mtime = p.stat().st_mtime_ns
+            except OSError:
+                continue
+            if preexisting.get(p.name) == mtime:
+                continue  # 转录前就在且没被动过: 用户文件, 不搬
+            kept.append(p)
+        candidates = kept
 
     def part_index(p: Path) -> int:
         # "xxx.10of12.json" → 10; 单文件排最前; 解析失败排到最后
@@ -163,8 +213,11 @@ def local_asr_transcribe_payload(
 ) -> tuple[dict[str, Any], Path] | ToolResult:
     """跑一次本地转录，返回 (transcript payload, 首个 job JSON 路径) 或 ToolResult。
 
-    直接转录用户原文件 (零拷贝); CLI 把 job JSON 写在输入旁, 结束后由
+    默认直接转录用户原文件 (零拷贝); CLI 把 job JSON 写在输入旁, 结束后由
     :func:`_relocate_job_outputs` 移进 work_dir —— 用户目录不留中间产物。
+    输入旁已存在同名 ``<stem>.json``（CLI 产物会**覆写**它, 用户数据必丢）时,
+    自动回退 staging 模式: 输入硬链进 work_dir 再转录, 产物落在 work_dir,
+    用户文件分毫不动。
     """
     status = local_asr_status()
     if not status["available"]:
@@ -183,10 +236,28 @@ def local_asr_transcribe_payload(
 
     work_dir.mkdir(parents=True, exist_ok=True)
     _clear_stale_outputs(work_dir, input_path.stem)
+    # 全程绝对路径: CLI 子进程的 cwd 不保证与插件一致, 相对路径会让产物
+    # 落到 CLI 的 cwd 下 (实测踩坑), relocate 也必须看同一目录。
+    input_path = input_path.resolve()
+    work_dir = work_dir.resolve()
+    transcribe_target = input_path
+    staged_link: Path | None = None
+    if _snapshot_preexisting(input_path):
+        # 用户在输入旁放着同名 JSON (笔记/上次产物): CLI 的产物会直接覆写该
+        # 文件, 零拷贝路径保不住它。回退 staging —— 硬链输入 (零磁盘开销,
+        # 跨盘才退化为复制), CLI 产物落在 work_dir, 用户文件分毫不动。
+        staged_link = work_dir / input_path.name
+        staged_link.unlink(missing_ok=True)
+        try:
+            os.link(input_path, staged_link)
+        except OSError:
+            shutil.copy2(input_path, staged_link)
+        transcribe_target = staged_link
+    preexisting = _snapshot_preexisting(transcribe_target)
     autosplit = _autosplit_value(autosplit_min)
     cmd = [
         status["command"],
-        str(input_path),
+        str(transcribe_target),
         "--output", "json",
         "--timestamp", "segments",
         "--diarize", "on" if diarize else "off",
@@ -199,6 +270,10 @@ def local_asr_transcribe_payload(
     if resolved_backend:
         cmd += ["--backend", resolved_backend]
 
+    def _cleanup_staged() -> None:
+        if staged_link is not None:
+            staged_link.unlink(missing_ok=True)
+
     started = started or time.time()
     try:
         proc = run_proc(
@@ -206,7 +281,8 @@ def local_asr_transcribe_payload(
             timeout=max(CLI_TIMEOUT_MIN_SECONDS, float(timeout_seconds)),
         )
     except Exception as exc:  # noqa: BLE001 — 启动失败/超时统一按可重试处理
-        _relocate_job_outputs(input_path, work_dir)  # 超时被杀也要清扫用户目录
+        _relocate_job_outputs(transcribe_target, work_dir, preexisting)  # 超时被杀也要清扫
+        _cleanup_staged()
         return ToolResult(
             text=f"[ERROR] local_asr CLI failed to run: {exc}",
             data={"provider": PROVIDER, "recoverable": True, "cmd": _safe_cmd(cmd)},
@@ -214,7 +290,8 @@ def local_asr_transcribe_payload(
 
     if proc.returncode != 0:
         # CLI 退出码契约: 1 = 用法/输入错误(不可重试), 2 = 服务错误, 3 = 任务失败(都可重试)
-        _relocate_job_outputs(input_path, work_dir)  # 失败的半成品 JSON 同样移走
+        _relocate_job_outputs(transcribe_target, work_dir, preexisting)  # 失败的半成品 JSON 同样移走
+        _cleanup_staged()
         usage_error = proc.returncode == 1
         detail = (proc.stderr or proc.stdout or "").strip()[-1500:]
         return ToolResult(
@@ -228,12 +305,13 @@ def local_asr_transcribe_payload(
             },
         )
 
-    job_paths = _relocate_job_outputs(input_path, work_dir)
+    job_paths = _relocate_job_outputs(transcribe_target, work_dir, preexisting)
+    _cleanup_staged()
     if not job_paths:
         return ToolResult(
             text=(
                 "[ERROR] local_asr CLI reported success but no job JSON was written next to "
-                f"the input ({input_path.parent})"
+                f"the input ({transcribe_target.parent})"
             ),
             data={
                 "provider": PROVIDER,

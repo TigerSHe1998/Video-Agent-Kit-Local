@@ -23,11 +23,11 @@
 
 默认文件契约为 `out/media.json`、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和 `out/report.md`。其中 `out/transcript.json` 是本地 ASR 可用时的预期产物；如果本地 ASR 不可用，应在 `out/report.md` 记录限制并继续完成其余闭环。单素材任务可使用 `out/video_ingest.json`；多素材任务可以显式传 `output_json` 写到 `out/ingest/*.json` 或 `out/video_ingest_<source>.json`，并在 `out/media.json` 汇总。
 
-`out/media.json` 保留给源素材探测。`qc_preview` 内部做媒体探测时会写 `out/preview_media.json` 这类 sidecar，不覆盖源素材 metadata。`validate_timeline` 和 `qc_preview` 会在报告中写入文件 hash；收尾前必须核对这些 hash 以拒绝已经过期的 validation / QC report（由 `video-edit-agent` skill 的完成门负责，不再依赖 hook）。
+`out/media.json` 保留给源素材探测；当它已记录另一个输入时，不带 `output_json` 的 `inspect_media` 会自动改落 `out/media/<素材名>.json`，显式 `output_json` 永远尊重调用方。`qc_preview` 内部做媒体探测时会写 `out/preview_media.json` 这类 sidecar，不覆盖源素材 metadata。`validate_timeline` 和 `qc_preview` 会在报告中写入文件 hash；收尾前必须核对这些 hash 以拒绝已经过期的 validation / QC report（由 `video-edit-agent` skill 的完成门负责，不再依赖 hook）。
 
 `schemas/video_observation.schema.json` 对应工具真实落盘的 observation package，即 `video_ingest` / `video_watch_segment` 生成的帧清单、sheet 清单、媒体元数据、抽帧参数和匹配转录。模型读图后的主观摘要、候选片段和风险判断应写入 `out/report.md` 或后续独立的 review 文件，不写回这个工具产物 schema。
 
-除上文详列的 9 个核心工具外，插件还提供 14 个确定性工具，主要服务 `video-speech-workflows`：`analyze_media`（场景/黑场/静音分析）、`subtitle_scout` / `subtitle_build` / `subtitle_render` / `subtitle_qc`（字幕四件套）、`condense_index` / `condense_plan` / `condense_render` / `condense_qc`（口播压缩四件套）、`diarize_audit` / `diarize_relabel`（说话人归属修复）、`video_read_frames`（原分辨率读帧）、`detect_shots`（镜头边界检测，缓存感知）。各自契约见对应 skill 文档。
+除上文详列的 9 个核心工具外，插件还提供 13 个确定性工具（另有 `speech_transcribe` 的 `transcribe` 兼容别名，注册表合计 23 项），主要服务 `video-speech-workflows`：`analyze_media`（场景/黑场/静音分析）、`subtitle_scout` / `subtitle_build` / `subtitle_render` / `subtitle_qc`（字幕四件套）、`condense_index` / `condense_plan` / `condense_render` / `condense_qc`（口播压缩四件套）、`diarize_audit` / `diarize_relabel`（说话人归属修复）、`video_read_frames`（原分辨率读帧）、`detect_shots`（镜头边界检测，缓存感知）。各自契约见对应 skill 文档。
 
 ## 插件使用
 
@@ -72,7 +72,7 @@ python3 "<插件根>/skills/sys-setup/scripts/env_doctor.py"
 它查的不止"包在不在"：ffmpeg 有没有带 `libx264` / `aac` / `libmp3lame` 与
 `libass`（缺了字幕烧录必挂，但只在渲染最后一步才炸）、本机中文字体的 cmap 是不是
 真覆盖中文（`fc-match` 对着没装的中文族会返回 DejaVu，烧出来是豆腐块而 ffmpeg
-退出码 0）、以及本地转录 CLI（`transcribe`）在不在 PATH 上。Python 依赖的检查项探测的是插件 `.venv` 的实际状态，不是跑体检的那个解释器。
+退出码 0）、以及本地转录 CLI（`transcribe`）在不在 PATH 上。Python 依赖不在体检范围（由 venv 自举管理）；其中字体覆盖度探测会在插件 `.venv` 解释器内执行（fontTools 在 venv 里）。
 
 字体不在标准目录时不用改代码，把目录塞给 `VE_FONT_DIRS`（多个目录用
 `os.pathsep` 分隔）即可；查找顺序见 `mcp/ve_tools/fonts.py`：`VE_FONT_DIRS` →
@@ -119,7 +119,7 @@ video-edit-agent classify
 
 - `VE_TRANSCRIBE_CMD`：`transcribe` 可执行文件路径。默认从 PATH 解析（Windows 上是 `transcribe.bat`）。
 - `VE_TRANSCRIBE_HOST` / `VE_TRANSCRIBE_PORT`：WebUI 服务地址，默认 `127.0.0.1:8390`。
-- `VE_TRANSCRIBE_AUTOSPLIT`：长音频自动分段分钟数，默认 30，`0` 关闭。服务端精确切分并把时间戳修正为全片绝对时间；分段时说话人标签带 `p{段}_` 前缀。
+- `VE_TRANSCRIBE_AUTOSPLIT`：长音频自动分段分钟数，默认 30，`0` 关闭（上限 180）。服务端精确切分并把时间戳修正为全片绝对时间；分段时说话人标签带 `p{段}_` 前缀。
 - `VE_TRANSCRIBE_BACKEND`：推理设备名（`transcribe --list-backend` 查看），默认沿用运行中服务已加载的后端。
 
 `speech_transcribe` 支持 `retries` / `retry_count` 表示服务瞬时错误的额外重试次数，默认 1，范围 0~10；`retry_backoff_seconds` 是指数退避初始秒数，默认 10 秒。只重试服务连接/中断等瞬时失败；用法/输入错误不会重试。

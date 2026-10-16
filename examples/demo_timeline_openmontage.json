@@ -16,7 +16,7 @@
   "assets": [
     {
       "id": "openmontage-demo",
-      "path": "OpenMontage/assets/signal-from-tomorrow-demo.mp4",
+      "path": "input.mp4",
       "type": "video"
     }
   ],
@@ -29,7 +29,7 @@
         {
           "id": "clip01",
           "asset_id": "openmontage-demo",
-          "source": "OpenMontage/assets/signal-from-tomorrow-demo.mp4",
+          "source": "input.mp4",
           "start": 0.0,
           "end": 3.0,
           "timeline_start": 0.0,
@@ -38,7 +38,7 @@
         {
           "id": "clip02",
           "asset_id": "openmontage-demo",
-          "source": "OpenMontage/assets/signal-from-tomorrow-demo.mp4",
+          "source": "input.mp4",
           "start": 8.0,
           "end": 11.0,
           "timeline_start": 3.0,
@@ -46,5 +46,6 @@
         }
       ]
     }
-  ]
+  ],
+  "_comment": "Demo of the demo_timeline/openmontage layout style. Sources use the placeholder 'input.mp4' — replace with your own material path before validating/rendering this example."
 }

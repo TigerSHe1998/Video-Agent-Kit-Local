@@ -566,7 +566,7 @@ def transition_fade_filter(clip: dict) -> str:
         value = clip.get(key)
         if not isinstance(value, dict):
             continue
-        kind = str(value.get("type") or value.get("name") or "").lower()
+        kind = str(value.get("type") or value.get("kind") or value.get("name") or "").lower()
         duration = float(value.get("duration") or 0)
         if kind in {"fade", "crossfade", "dissolve"} and duration > 0:
             if direction == "in":
