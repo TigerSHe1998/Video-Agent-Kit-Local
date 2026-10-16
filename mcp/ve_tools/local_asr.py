@@ -11,8 +11,10 @@
   服务端用 ffmpeg 按真实时长精确切分，每段一个任务，``params.seg_offset_ms`` 把
   时间戳修正为全片绝对时间。说话人编号跨段不互通，多段结果沿用既有
   ``p{段}_{说话人}`` 前缀约定（与原云端分块路径一致，下游文档已认知该语义）。
-- CLI 把 job JSON 写在**输入文件旁**，因此输入先硬链（跨盘回退复制）进 work_dir，
-  绝不往用户源目录写任何东西；产物 JSON 也随之落在 work_dir。
+- CLI 把 job JSON 写在**输入文件旁**（无输出目录参数）。为避免把大文件素材复制
+  一份进 ``.video_agent``（一次剪辑 200GB 时不可接受），本模块**直接转录用户原
+  文件（零拷贝）**，CLI 结束后把 job JSON 从输入旁**移动**进 work_dir —— 成功、
+  失败、超时路径都清扫，用户目录不留任何中间产物。
 - 退出码语义：0 成功；1 用法/输入错误（不重试）；2 服务错误（可重试）；3 任务
   失败（可重试，由调用方按 retries 控制）。
 - job JSON 口径：``status/error/detail`` + ``result.{text, language, segments[
@@ -103,29 +105,50 @@ def _autosplit_value(override: Any) -> int:
     return max(0, min(180, minutes))
 
 
-def _stage_input(input_path: Path, work_dir: Path) -> Path:
-    """把输入放进 work_dir（CLI 会往输入旁写 job JSON，不能污染用户源目录）。
+def _relocate_job_outputs(input_path: Path, work_dir: Path) -> list[Path]:
+    """把 CLI 写在输入文件旁的 job JSON 移进 work_dir（按段序升序）。
 
-    硬链零拷贝；跨盘 os.link 失败回退完整复制。文件名保留 stem+后缀，同
-    work_dir 本来就按源路径哈希隔离，不会互撞。复用已有 staged 时校验
-    mtime: 显式共享 work_dir 下两个同名同大小的不同视频不至于静默转错。
+    transcribe CLI 把产物硬编码写在输入的父目录 (无 --output-dir 参数); 方案 B
+    因此直接转录用户原文件 (零拷贝 —— 一次剪辑 200GB 素材时复制一份进
+    .video_agent 是不可接受的), CLI 结束后立刻把产物**移动**过来, 让用户目录
+    不留任何残留。失败/超时路径同样调用本函数做清扫。
+
+    返回移动后的 job JSON 列表 (空 = CLI 没写产物)。移动失败时回退为复制并
+    删源 —— 复制的是几 KB 的 JSON, 不是媒体文件。不用 glob: stem 含
+    ``[ ] * ?`` 等字符时 glob 模式会失配/误配。
     """
-    staged = work_dir / input_path.name
-    try:
-        if (
-            staged.exists()
-            and staged.stat().st_size == input_path.stat().st_size
-            and staged.stat().st_mtime == input_path.stat().st_mtime
-        ):
-            return staged
-    except OSError:
-        pass
-    staged.unlink(missing_ok=True)
-    try:
-        os.link(input_path, staged)
-    except OSError:
-        shutil.copy2(input_path, staged)
-    return staged
+    stem = input_path.stem
+    parent = input_path.parent
+    prefix = f"{stem}."
+    candidates = [
+        p for p in parent.iterdir()
+        if p.name == f"{stem}.json"
+        or (p.name.startswith(prefix) and "of" in p.name and p.name.endswith(".json"))
+    ]
+
+    def part_index(p: Path) -> int:
+        # "xxx.10of12.json" → 10; 单文件排最前; 解析失败排到最后
+        if p.name == f"{stem}.json":
+            return -1
+        try:
+            return int(p.name[len(prefix):].split("of", 1)[0])
+        except ValueError:
+            return 10 ** 9
+
+    moved: list[Path] = []
+    for src in sorted(candidates, key=part_index):
+        target = work_dir / src.name
+        target.unlink(missing_ok=True)
+        try:
+            os.replace(src, target)
+        except OSError:
+            try:
+                shutil.copy2(src, target)
+                src.unlink(missing_ok=True)
+            except OSError:
+                continue  # 移不动就留在原地 (用户目录里几 KB 的 JSON), 不阻断转录
+        moved.append(target)
+    return moved
 
 
 def local_asr_transcribe_payload(
@@ -138,7 +161,11 @@ def local_asr_transcribe_payload(
     timeout_seconds: float = 3600.0,
     started: float = 0.0,
 ) -> tuple[dict[str, Any], Path] | ToolResult:
-    """跑一次本地转录，返回 (transcript payload, 首个 job JSON 路径) 或 ToolResult。"""
+    """跑一次本地转录，返回 (transcript payload, 首个 job JSON 路径) 或 ToolResult。
+
+    直接转录用户原文件 (零拷贝); CLI 把 job JSON 写在输入旁, 结束后由
+    :func:`_relocate_job_outputs` 移进 work_dir —— 用户目录不留中间产物。
+    """
     status = local_asr_status()
     if not status["available"]:
         return ToolResult(
@@ -155,12 +182,11 @@ def local_asr_transcribe_payload(
         )
 
     work_dir.mkdir(parents=True, exist_ok=True)
-    staged = _stage_input(input_path, work_dir)
-    _clear_stale_outputs(staged)
+    _clear_stale_outputs(work_dir, input_path.stem)
     autosplit = _autosplit_value(autosplit_min)
     cmd = [
         status["command"],
-        str(staged),
+        str(input_path),
         "--output", "json",
         "--timestamp", "segments",
         "--diarize", "on" if diarize else "off",
@@ -180,6 +206,7 @@ def local_asr_transcribe_payload(
             timeout=max(CLI_TIMEOUT_MIN_SECONDS, float(timeout_seconds)),
         )
     except Exception as exc:  # noqa: BLE001 — 启动失败/超时统一按可重试处理
+        _relocate_job_outputs(input_path, work_dir)  # 超时被杀也要清扫用户目录
         return ToolResult(
             text=f"[ERROR] local_asr CLI failed to run: {exc}",
             data={"provider": PROVIDER, "recoverable": True, "cmd": _safe_cmd(cmd)},
@@ -187,6 +214,7 @@ def local_asr_transcribe_payload(
 
     if proc.returncode != 0:
         # CLI 退出码契约: 1 = 用法/输入错误(不可重试), 2 = 服务错误, 3 = 任务失败(都可重试)
+        _relocate_job_outputs(input_path, work_dir)  # 失败的半成品 JSON 同样移走
         usage_error = proc.returncode == 1
         detail = (proc.stderr or proc.stdout or "").strip()[-1500:]
         return ToolResult(
@@ -200,12 +228,12 @@ def local_asr_transcribe_payload(
             },
         )
 
-    job_paths = _collect_job_jsons(staged)
+    job_paths = _relocate_job_outputs(input_path, work_dir)
     if not job_paths:
         return ToolResult(
             text=(
-                "[ERROR] local_asr CLI reported success but no job JSON was written to "
-                f"{work_dir}"
+                "[ERROR] local_asr CLI reported success but no job JSON was written next to "
+                f"the input ({input_path.parent})"
             ),
             data={
                 "provider": PROVIDER,
@@ -228,45 +256,19 @@ def _safe_cmd(cmd: list[str]) -> str:
     return " ".join(cmd[:2]) + " …" if len(cmd) > 2 else " ".join(cmd)
 
 
-def _clear_stale_outputs(staged: Path) -> None:
-    """转录前清掉该输入的历史产物 JSON。
+def _clear_stale_outputs(work_dir: Path, stem: str) -> None:
+    """转录前清掉 work_dir 里该输入的历史产物 JSON。
 
-    CLI 把结果写在 staged 文件旁: 单段是 <stem>.json, 分段是 <stem>.NofM.json。
-    不清的话, 先跑单段再跑分段时旧单文件会把新分段结果整个遮掉 (_collect_job_jsons
-    优先取单文件), 返回陈旧转录。staged 输入本身不动。
+    单段是 <stem>.json, 分段是 <stem>.NofM.json。不清的话, 先跑单段再跑分段
+    时旧单文件会把新分段结果整个遮掉, 返回陈旧转录。
     """
-    stem = staged.stem
-    for p in staged.parent.iterdir():
+    for p in work_dir.iterdir():
         name = p.name
         if name == f"{stem}.json" or (name.startswith(f"{stem}.") and "of" in name and name.endswith(".json")):
             try:
                 p.unlink(missing_ok=True)
             except OSError:
                 pass
-
-
-def _collect_job_jsons(staged: Path) -> list[Path]:
-    """单段产物是 <stem>.json；autosplit 多段是 <stem>.NofM.json …（按段序升序）。
-
-    不用 glob: stem 含 ``[ ] * ?`` 等字符时 glob 模式会失配/误配。
-    """
-    single = staged.with_suffix(".json")
-    if single.is_file():
-        return [single]
-    prefix = f"{staged.stem}."
-    parts = [
-        p for p in staged.parent.iterdir()
-        if p.name.startswith(prefix) and p.name.endswith(".json") and "of" in p.name
-    ]
-
-    def part_index(p: Path) -> int:
-        # "xxx.10of12.json" → 10; 解析失败排到最后
-        try:
-            return int(p.name[len(prefix):].split("of", 1)[0])
-        except ValueError:
-            return 10 ** 9
-
-    return sorted(parts, key=part_index)
 
 
 def _speaker_map(result: dict[str, Any]) -> dict[int, int]:
