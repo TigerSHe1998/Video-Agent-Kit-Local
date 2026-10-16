@@ -1,0 +1,20 @@
+{
+  "name": "video-agent-kit-local",
+  "plugins": [
+    {
+      "name": "video-agent-kit-local",
+      "source": ".",
+      "version": "0.1.0",
+      "description": "本地化视频剪辑工具包：本地转录、抽帧理解、时间线、渲染与质检。",
+      "displayName": "Video Agent Kit Local",
+      "displayName_i18n": {
+        "zh-CN": "视频剪辑工具包（本地版）"
+      },
+      "description_i18n": {
+        "en": "Local video editing toolkit: local ASR, frame understanding, timeline, render and QC.",
+        "zh-CN": "本地化视频剪辑工具包：本地转录、抽帧理解、时间线、渲染与质检。"
+      },
+      "category": "utilities"
+    }
+  ]
+}
