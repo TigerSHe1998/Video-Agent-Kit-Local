@@ -46,7 +46,7 @@ skills/video-speech-workflows/SKILL.md
 验证、渲染、QC 和修复闭环；`video-edit-assembly` 是多素材组装成片子流程，
 用于多段视频/音频/图片素材的分组、选择、去重、排序和成片结构规划；
 `video-speech-workflows` 处理单源语音压缩和字幕；`sys-setup` 只管系统级环境体检
-（ffmpeg/字体/转录 CLI，跨 macOS / Windows / Linux），不碰剪辑任务；Python 依赖由 venv 自举自动管理。
+（ffmpeg/字体/转录 CLI，仅 Windows），不碰剪辑任务；Python 依赖由 venv 自举自动管理。
 
 ### Python 依赖（自动，无需手工安装）
 
@@ -58,7 +58,7 @@ python3 "<插件根>/mcp/bootstrap.py" --ensure
 
 ### 系统级环境（ffmpeg / 字体 / 转录 CLI）
 
-系统级依赖用体检脚本排查（跨 macOS / Windows / Linux）：
+系统级依赖用体检脚本排查（仅 Windows）：
 
 ```bash
 # 只体检：逐项报"要什么 / 缺了挂哪个能力 / 本平台怎么装"
@@ -71,13 +71,12 @@ python3 "<插件根>/skills/sys-setup/scripts/env_doctor.py"
 
 它查的不止"包在不在"：ffmpeg 有没有带 `libx264` / `aac` / `libmp3lame` 与
 `libass`（缺了字幕烧录必挂，但只在渲染最后一步才炸）、本机中文字体的 cmap 是不是
-真覆盖中文（`fc-match` 对着没装的中文族会返回 DejaVu，烧出来是豆腐块而 ffmpeg
-退出码 0）、以及本地转录 CLI（`transcribe`）在不在 PATH 上。Python 依赖不在体检范围（由 venv 自举管理）；其中字体覆盖度探测会在插件 `.venv` 解释器内执行（fontTools 在 venv 里）。
+真覆盖中文（解析出的字体若无中文覆盖，烧出来是豆腐块而 ffmpeg 退出码 0）、
+以及本地转录 CLI（`transcribe`）在不在 PATH 上。Python 依赖不在体检范围（由 venv 自举管理）；其中字体覆盖度探测会在插件 `.venv` 解释器内执行（fontTools 在 venv 里）。
 
 字体不在标准目录时不用改代码，把目录塞给 `VE_FONT_DIRS`（多个目录用
 `os.pathsep` 分隔）即可；查找顺序见 `mcp/ve_tools/fonts.py`：`VE_FONT_DIRS` →
-`/root/.fonts`、`/usr/share/fonts` → 本平台系统字体目录（macOS 苹方 / Windows
-微软雅黑，所以这两个平台通常不需要装字体）→ `fc-list :lang=zh`。
+Windows 系统字体目录（自带微软雅黑，通常不需要装字体）。
 
 MCP 工具调用的 `arguments` 顶层必须是 JSON object；如果入口传入数组、字符串等非对象参数，server 会直接返回结构化错误，不把异常泄漏成工具 traceback。
 

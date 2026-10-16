@@ -4,9 +4,9 @@
 只管**系统级**依赖 (ffmpeg/字体/转录 CLI/磁盘) —— Python 依赖由 mcp/bootstrap.py
 自动管理 (插件内 .venv, 首次调用自动构建), 不在本脚本的检查范围内。
 
-跨平台 (macOS / Windows / Linux):
+仅支持 Windows:
 - **要求先于命令**: 每项先说清"需要什么"(名字 + 版本线), 再按当前平台给示例命令。
-  用户机器长什么样这里不知道 (有没有 brew/winget、有没有管理员权限、是不是 conda
+  用户机器长什么样这里不知道 (有没有 winget/choco、有没有管理员权限、是不是 conda
   环境), 所以命令是示例不是规定 —— 只有要求是硬的。
 - **探测与修复分离**: 默认只读探测。系统级软件 (ffmpeg / 字体) 永远只打印,
   不自动执行。
@@ -15,8 +15,8 @@
 - **探测顺序即依赖顺序**: 没装 ffmpeg 就不必再问它有没有 libass —— 后置项标
   `needs`, 前置失败则整项跳过 (报 skip 而不是伪失败), 免得一个根因炸出五条噪音。
 - **"装了" ≠ "能用"**: 这个插件挂在"装了但不带某个 feature"上的次数比挂在"没装"上
-  多 —— conda/静态包的 ffmpeg 常常没有 libass(烧不了字幕)或没有 libmp3lame;
-  fc-match 问它要中文字体会把 DejaVu 交给你(渲染出豆腐块但编码成功)。所以
+  多 —— 精简/静态包的 ffmpeg 常常没有 libass(烧不了字幕)或没有 libmp3lame;
+  解析出的字体也可能没有中文覆盖(渲染出豆腐块但编码成功)。所以
   ffmpeg 查编码器/滤镜、字体查 cmap 真覆盖, 不只查 PATH 上在不在。
 
 用法:
@@ -44,8 +44,7 @@ PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR")
 REQUIREMENTS = PLUGIN_ROOT / "requirements.txt"
 PY = sys.executable or "python3"
 
-OS = ("macos" if sys.platform == "darwin"
-      else "windows" if os.name == "nt" else "linux")
+OS = "windows"
 
 # ── 国内镜像: 默认走, 不是"备选" ──────────────────────────────────────────────
 # 面向的是普通用户, 官方源在国内经常几十 KB/s 甚至直接超时, 而 pip 的超时表现是
@@ -55,21 +54,11 @@ PIP_TSINGHUA = "https://pypi.tuna.tsinghua.edu.cn/simple"
 PIP_ALIYUN = "https://mirrors.aliyun.com/pypi/simple/"
 PIP_INDEX = os.environ.get("VE_PIP_INDEX", PIP_TSINGHUA)
 
-# ffmpeg / 字体的装法分平台, 国内都建议走镜像 —— 但不同包管理器换镜像的方式差很多:
-#   brew   → 设 HOMEBREW_BOTTLE_DOMAIN (bottle 从 GitHub 下, 国内很慢/失败)
-#   apt    → 换 sources.list 里的源 (改的是系统全局配置, 不是装一次就完)
-#   conda  → 指定 channel URL, 最干净 (无 root、不动系统包管理器)
-# Windows 上 winget 没有镜像概念, ffmpeg 静态包来自 gyan.dev, 可能慢 —— 用 conda 绕开。
-HOMEBREW_BOTTLE = "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles"
+# ffmpeg 国内镜像路径: conda-forge 清华镜像 (winget 没有镜像概念)。
 CONDA_FORGE_TSINGHUA = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"
 
 # 渲染要落 preview/final mp4 + 抽帧 contact sheet, 空间不够是"渲到一半炸"。
 MIN_FREE_GB = 5
-
-
-def by_os(**variants: list[str]) -> list[str]:
-    """按当前平台取一份修复示例; 缺本平台条目时回落 any。"""
-    return variants.get(OS) or variants.get("any") or []
 
 
 # ── 检查项模型 ───────────────────────────────────────────────────────────────
@@ -103,7 +92,7 @@ class Result:
 # 体检必须探测 venv, 而不是跑 doctor 的解释器 —— 两者经常不是同一个。
 BOOTSTRAP = PLUGIN_ROOT / "mcp" / "bootstrap.py"
 VENV_DIR = PLUGIN_ROOT / ".venv"
-VENV_PY = VENV_DIR / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+VENV_PY = VENV_DIR / "Scripts" / "python.exe"
 
 
 def _requirements_stamp() -> str | None:
@@ -202,7 +191,7 @@ def probe_font() -> tuple[bool, str]:
 
     这里不查"某个目录下有没有某个文件", 而是直接调 ve_tools.fonts, 因为字幕
     分行是拿真字体量出来的, 体检和渲染必须看同一个结果。cmap 真覆盖也要查:
-    fc-match 对着没装的中文族会返回 DejaVu, 烧出来是豆腐块而 ffmpeg 退出码 0。
+    解析出的字体若无中文覆盖, 烧出来是豆腐块而 ffmpeg 退出码 0。
     在插件 venv 解释器里跑 (fontTools 在 venv 里; doctor 自己的解释器没有)。
     """
     state, detail = venv_state()
@@ -272,70 +261,45 @@ CHECKS: list[Check] = [
     Check("ffmpeg", "ffmpeg + ffprobe", "剪切 / 渲染 / 抽帧 / 时长探测 —— 缺了整条流水线都起不来",
           probe_bins("ffmpeg", "ffprobe"),
           need="ffmpeg (含 ffprobe), 且在 PATH 上 —— 版本不挑, 4.3 起都行 (xfade 要 4.3+)",
-          # by_os 的 any 只在"无本平台条目"时回落, 三平台都有条目就会吞掉 conda 行 ——
-          # 但 conda 是跨平台最干净的国内源路径 (尤其 Windows, winget 没镜像), 必须显示。
-          fix=by_os(
-                  macos=["# brew 的 bottle 从 GitHub 下, 国内常慢/失败; 先切清华镜像再装:",
-                         f"export HOMEBREW_BOTTLE_DOMAIN={HOMEBREW_BOTTLE}",
-                         "brew install ffmpeg"],
-                  windows=["# winget 没有镜像概念, ffmpeg 静态包来自 gyan.dev, 国内可能慢;",
-                           "winget install --id Gyan.FFmpeg -e",
-                           "# 或 choco install ffmpeg / scoop install ffmpeg",
-                           "# 装完新开一个终端, 否则 PATH 不刷新"],
-                  linux=["sudo apt-get install -y ffmpeg   # apt 源换清华/USTC 镜像更快 (改 sources.list, 系统级改动)"],
-              ) + ["# 想走国内镜像 / 无 root / 不动系统包管理器 → 任何平台都用 conda:",
-                   f"#   conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg   # 清华镜像"],
+          fix=["# winget 没有镜像概念, ffmpeg 静态包来自 gyan.dev, 国内可能慢;",
+               "winget install --id Gyan.FFmpeg -e",
+               "# 或 choco install ffmpeg / scoop install ffmpeg",
+               "# 装完新开一个终端, 否则 PATH 不刷新",
+               "# 想走国内镜像 → conda (不动系统包管理器):",
+               f"#   conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg   # 清华镜像"],
           cheap=True),
     Check("ffmpeg-encoders", "ffmpeg 带 libx264/aac/libmp3lame", "渲染最后一步的编码; 缺了前面白跑",
           probe_ffmpeg_encoders,
           need="ffmpeg 编译时带 libx264、aac、libmp3lame (`ffmpeg -encoders` 能看到)",
-          fix=by_os(
-                  macos=[f"export HOMEBREW_BOTTLE_DOMAIN={HOMEBREW_BOTTLE}",
-                         "brew reinstall ffmpeg   # brew 的 ffmpeg 是全功能构建"],
-                  windows=["# gyan.dev 的 full 构建带全套; 精简版/自编译版才会缺",
-                           "winget install --id Gyan.FFmpeg -e"],
-                  linux=["sudo apt-get install -y ffmpeg   # 发行版包一般带全套; 缺的多是自编译/静态包"],
-              ) + [f"# 换成 conda-forge 的全功能构建 (跨平台, 走清华镜像):",
-                   f"#   conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg",
-                   "# 机器上有多个 ffmpeg 时先确认 PATH 上是哪个: 上面探测行里有路径"],
+          fix=["# gyan.dev 的 full 构建带全套; 精简版/自编译版才会缺",
+               "winget install --id Gyan.FFmpeg -e",
+               f"# 换成 conda-forge 的全功能构建 (走清华镜像):",
+               f"#   conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg",
+               "# 机器上有多个 ffmpeg 时先确认 PATH 上是哪个: 上面探测行里有路径"],
           cheap=True, needs="ffmpeg"),
     Check("ffmpeg-filters", "ffmpeg 带 libass/libfreetype", "字幕烧录 + 标题卡/角标 + 段间溶解",
           probe_ffmpeg_filters,
           need="ffmpeg 编译时带 libass (subtitles/ass 滤镜) 和 libfreetype (drawtext)",
-          fix=by_os(
-                  macos=[f"export HOMEBREW_BOTTLE_DOMAIN={HOMEBREW_BOTTLE}",
-                         "brew reinstall ffmpeg"],
-                  windows=["winget install --id Gyan.FFmpeg -e   # full 构建带 libass"],
-                  linux=["sudo apt-get install -y ffmpeg   # 若是自编译: 重新 configure 加 --enable-libass --enable-libfreetype"],
-              ) + [f"# conda 路线 (跨平台, 清华镜像): conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg",
-                   "# 注意: 部分极简/静态构建就是不带 libass, 换构建比补参数省事"],
+          fix=["winget install --id Gyan.FFmpeg -e   # full 构建带 libass",
+               f"# conda 路线 (清华镜像): conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg",
+               "# 注意: 部分极简/静态构建就是不带 libass, 换构建比补参数省事"],
           cheap=True, needs="ffmpeg"),
     Check("font-cjk", "中文字体 (真能写中文的)", "字幕烧录 / 标题卡 / contact sheet 标签",
           probe_font,
-          need="一个覆盖中日韩字形的字体文件; 首选 Noto Sans CJK, "
-               "系统自带的雅黑/苹方/AR PL UMing 也算 (mac/Win 一般已自带)",
-          fix=by_os(
-                  linux=["sudo apt-get install -y fonts-noto-cjk   # Debian/Ubuntu",
-                         "# 或 dnf install google-noto-sans-cjk-fonts / pacman -S noto-fonts-cjk"],
-                  macos=["# 系统自带苹方(PingFang.ttc), 正常不会缺; 真缺了再装 Noto:",
-                         f"export HOMEBREW_BOTTLE_DOMAIN={HOMEBREW_BOTTLE}",
-                         "brew install --cask font-noto-sans-cjk-sc"],
-                  windows=["# 系统自带微软雅黑(msyh.ttc), 正常不会缺;",
-                           "# 真缺了从 https://github.com/notofonts/noto-cjk 下 NotoSansSC 放进字体目录"],
-              ) + ["# 字体装在别处(或想指定用哪个)时, 把目录塞给 VE_FONT_DIRS 即可:",
-                   f"#   {'set' if OS == 'windows' else 'export'} VE_FONT_DIRS=<字体目录>"
-                   f"   (多个目录用 {os.pathsep!r} 分隔)",
-                   "# 无 root 也可以: 下 NotoSansSC-400.ttf/-700.ttf 到任意目录再设 VE_FONT_DIRS"]),
+          need="一个覆盖中日韩字形的字体文件; Windows 自带微软雅黑(msyh.ttc), 正常不会缺",
+          fix=["# 系统自带微软雅黑(msyh.ttc), 正常不会缺;",
+               "# 真缺了从 https://github.com/notofonts/noto-cjk 下 NotoSansSC 放进字体目录",
+               "# 字体装在别处(或想指定用哪个)时, 把目录塞给 VE_FONT_DIRS 即可:",
+               f"#   set VE_FONT_DIRS=<字体目录>   (多个目录用 {os.pathsep!r} 分隔)"]),
     # 本地转录: Moss Transcribe WebUI 的 CLI 在 PATH 上即可用, 无服务时 CLI 自启。
     # 只查 CLI 在不在, 不预连服务端口 (服务启动/模型加载是分钟级, 不该挡体检)。
     Check("asr-cli", "本地转录 CLI (transcribe)", "speech_transcribe — 缺则没有转录, 语音类任务全瘸",
           probe_asr,
           need="Moss Transcribe WebUI 部署好且 cli/ 目录在 PATH 上 (或 VE_TRANSCRIBE_CMD 指向 transcribe)",
           fix=["# 安装 Moss Transcribe WebUI 后, 把其 cli/ 目录加入 PATH:",
-               *by_os(windows=["#   setx PATH \"%PATH%;C:\\AI\\transcribe_cpp_webui\\cli\"  (或系统设置里加, 重启终端生效)"],
-                      any=["#   export PATH=\"$PATH:/path/to/transcribe_cpp_webui/cli\"  (写进 ~/.bashrc)"]),
+               "#   setx PATH \"%PATH%;C:\\AI\\transcribe_cpp_webui\\cli\"  (或系统设置里加, 重启终端生效)",
                "# 或在 .env 里显式指定可执行文件:",
-               f"#   {'set' if OS == 'windows' else 'export'} VE_TRANSCRIBE_CMD=C:/AI/transcribe_cpp_webui/cli/transcribe.bat",
+               "#   set VE_TRANSCRIBE_CMD=C:/AI/transcribe_cpp_webui/cli/transcribe.bat",
                "# 服务地址可配 (默认 127.0.0.1:8390): VE_TRANSCRIBE_HOST / VE_TRANSCRIBE_PORT"],
           soft=True),
     Check("disk", f"项目盘可用空间 ≥ {MIN_FREE_GB}G", "预览/成片 mp4 + 抽帧图落在项目目录",

@@ -10,8 +10,6 @@ from __future__ import annotations
 import functools
 import math
 import re
-import shutil
-from .ffproc import run_proc
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -155,12 +153,10 @@ _FONT_FILE_HINTS = {
     "black": ["NotoSansSC-900.ttf"],
     "bold": ["NotoSansSC-700.ttf"],
     "medium": ["NotoSansSC-500.ttf"],
-    "regular": ["NotoSansSC-400.ttf", "PingFang.ttf"],
+    "regular": ["NotoSansSC-400.ttf"],
 }
-# Dirs the shipped weights live in on the Linux images. Everything else
-# (VE_FONT_DIRS, the platform's own font dirs) is handled by `fonts.py` —
-# see resolve_font_file for why the order below is kept as-is.
-_FONT_DIRS = [Path("/root/.fonts"), Path("/usr/share/fonts")]
+# VE_FONT_DIRS 与系统字体目录由 fonts.py 统一处理; 这里只保留权重提示的
+# 手动安装目录 (VE_FONT_DIRS) 查找。
 
 
 STRONG_PUNCT = "。！？!?…."
@@ -277,69 +273,26 @@ def _apply_readability(style: dict[str, Any], explicit: set[str]) -> None:
 
 def resolve_font_file(family: str, weight: str | None = None) -> str | None:
     """Locate a concrete font file: shipped weight hints first (so we pick the
-    intended weight rather than whatever fontconfig aliases to), then fc-match,
-    then the platform's own CJK faces.
+    intended weight), then the Windows CJK faces via fonts.py.
 
-    The last step is what makes this work off Linux: macOS only has fontconfig
-    if the user installed it, Windows never does, and both ship a perfectly good
-    CJK font that the first two steps cannot see. Order is deliberate — an
-    already-provisioned Linux box still resolves through the hints/fc-match it
-    always did, so measured line breaks do not shift under existing traces.
+    Windows 自带雅黑/黑体/宋体且没有 fontconfig —— 权重提示命不中时直接
+    走 fonts.find_cjk_font (VE_FONT_DIRS → 系统字体目录 → 名字提示扫描)。
     """
     for name in _FONT_FILE_HINTS.get((weight or "regular").lower(), []):
-        for directory in [*override_dirs(), *_FONT_DIRS]:
+        for directory in override_dirs():
             candidate = directory / name
             if candidate.is_file():
                 return str(candidate)
-    if shutil.which("fc-match"):
-        query = f"{family}:weight={weight}" if weight else family
-        try:
-            proc = run_proc(
-                ["fc-match", "-f", "%{file}", query], capture_output=True, text=True, timeout=15
-            )
-            path = proc.stdout.strip()
-        except Exception:
-            path = ""
-        # fc-match never fails: ask for an uninstalled Chinese family and it
-        # hands back DejaVu Sans, which has no CJK glyphs at all. Every preset
-        # here is a Chinese subtitle preset, so a zero-CJK answer is not an
-        # answer — take a real CJK face over it when the machine has one.
-        # (`uncovered_characters` would still catch this later, but only as a
-        # hard failure at build time, which is not a better outcome.)
-        if path and Path(path).is_file():
-            if covers_cjk(path) is not False:
-                return path
-            fallback = find_cjk_font(weight or "regular")
-            return fallback or path
     return find_cjk_font(weight or "regular")
 
 
 def font_family_of(font_file: Path) -> str | None:
     """Family name libass should be asked for, for this file.
 
-    Goes into the ASS `Style:` line verbatim, so it has to be *one* family:
-    `fc-scan` applies the format once per face, and a `.ttc` collection has
-    several (PingFang.ttc, uming.ttc, msyh.ttc are all collections), which
-    without a separator comes back as "AR PL UMing CNAR PL UMing HK…" —
-    a name that resolves to nothing and silently renders in libass's default
-    font. Hence the `\\n` and taking the first line.
-
-    Falls back to the filename→family map when there is no fontconfig at all
-    (Windows, bare macOS); returning None there would leave the caller asking
-    libass for the preset's `Noto Sans SC`, which is not installed on those
-    machines either.
+    Goes into the ASS `Style:` line verbatim, so it has to be *one* family
+    (a `.ttc` collection like msyh.ttc has several).
+    直接走 fonts.py 的文件名→family 映射。
     """
-    if shutil.which("fc-scan"):
-        try:
-            proc = run_proc(
-                ["fc-scan", "-f", "%{family[0]}\\n", str(font_file)],
-                capture_output=True, text=True, timeout=15,
-            )
-            first = next((ln.strip() for ln in proc.stdout.splitlines() if ln.strip()), "")
-        except Exception:
-            first = ""
-        if first:
-            return first
     return family_of_file(font_file)
 
 
@@ -679,11 +632,9 @@ def _font_charset(font_file: str) -> frozenset[int] | None:
 def uncovered_characters(text: str, style: dict[str, Any], limit: int = 12) -> list[str]:
     """Characters the resolved font has no glyph for.
 
-    This check exists because `fc-match` never fails: ask it for a Chinese
-    family that is not installed and it cheerfully returns DejaVu Sans, which
-    has no CJK glyphs at all. libass then renders blanks or tofu boxes and the
-    burn-in *succeeds* — a silent, total failure. Reading the font's cmap
-    catches it before we encode anything.
+    This check exists because a resolved-but-wrong font fails silently: libass
+    renders blanks or tofu boxes and the burn-in *succeeds* — a total failure
+    with exit code 0. Reading the font's cmap catches it before we encode.
     """
     charset = _font_charset(str(style["font_file"]))
     if charset is None:

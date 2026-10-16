@@ -1,5 +1,5 @@
 ---
-description: 体检系统级依赖：ffmpeg 编码器、中文字体、转录 CLI。
+description: 体检 Windows 系统级依赖：ffmpeg 编码器、中文字体、转录 CLI。
 skills: sys-setup
 ---
 
@@ -10,7 +10,7 @@ skills: sys-setup
 1. 先跑 `env_doctor.py` (Bash timeout ≥ 120s — 出网被挡时它要先把超时耗完才能给结论), 不要凭记忆预判缺什么。
 2. 按打印顺序处理; 标 `[未探测]` 的项不要照着装, 先修它的前置再重跑体检。
 3. **系统级软件不要替用户装**: ffmpeg、中文字体只报"要什么" + 脚本给的本平台示例命令, 让用户自己执行 —— 各人机器上的装法和权限都不同。**卸包更不许自动做**。
-4. 装不动先换镜像再谈代理: ffmpeg 在 mac 上要先 `HOMEBREW_BOTTLE_DOMAIN`, 任何平台都可以用 conda-forge 清华镜像绕开。但改全局配置前先问用户 —— 那影响他机器上所有项目。
+4. 装不动先换镜像再谈代理: winget 的 ffmpeg 静态包来自 gyan.dev 没有镜像概念, 可以用 conda-forge 清华镜像绕开。但改全局配置前先问用户 —— 那影响他机器上所有项目。
 5. 标 `[-]` 的是本平台不适用, 不是缺口; 标 `只降级不致命` 的 (转录 CLI 缺失、磁盘余量) 不阻塞纯剪辑任务。
 6. 字体那项要看清楚: 打印了路径**也可能是缺口** —— 若结论说该字体 cmap 无中文, 那烧出来是豆腐块而 ffmpeg 退出码 0, 必须当缺失处理 (装 Noto CJK 或设 `VE_FONT_DIRS`)。
 7. Python 依赖缺失不属于本体检范围: 插件代码跑在插件自己的 `.venv` 里, 遇到 ModuleNotFoundError 跑 `python3 <plugin_root>/mcp/bootstrap.py --ensure` 即可。

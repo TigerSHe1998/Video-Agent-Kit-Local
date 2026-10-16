@@ -1018,13 +1018,8 @@ def build_contact_sheets(frames: list[SampledFrame], out_dir: Path, defaults: Vi
             ]
             bold = [p for p in files if "bold" in p.name.lower()]
             font_paths.extend(str(p) for p in [*bold, *files])
-    font_paths.extend([
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    ])
-    # 上面全是 Linux 路径; mac/Windows 的系统字体在别处 (见 fonts.py)。找不到就
-    # 走下面的 PIL 默认位图字体 —— 时间戳标签只有数字, 不至于因此失效。
+    # 系统字体 (微软雅黑等) 由 fonts.py 统一发现。找不到就走下面的 PIL 默认
+    # 位图字体 —— 时间戳标签只有数字, 不至于因此失效。
     platform_font = find_cjk_font("bold")
     if platform_font:
         font_paths.append(platform_font)

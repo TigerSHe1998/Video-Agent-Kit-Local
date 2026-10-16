@@ -9,7 +9,7 @@ when_to_use: >
   libmp3lame and libass/libfreetype filters, a CJK font whose cmap truly covers Chinese, the local transcribe
   CLI (Moss Transcribe WebUI) on PATH, free disk space. Python deps are NOT checked here (owned by the
   plugin venv bootstrap; a ModuleNotFoundError fix is mcp/bootstrap.py --ensure, never a global pip install).
-  Per-platform install guidance with China mirrors by default. Works on macOS, Windows and Linux.
+  Windows-only plugin; install guidance uses China mirrors by default.
 ---
 
 # System Setup (sys-setup)
@@ -51,9 +51,8 @@ There is no key, no cloud, nothing to configure beyond the CLI being reachable:
 
 ## Mirrors — use them by default, not as a fallback
 
-Most users of this plugin are in mainland China, where the official PyPI CDN and
-GitHub-hosted Homebrew bottles are routinely slow enough to time out. A timeout
-there doesn't look like a network problem — it looks like "the install ran for
+The official CDN routes from mainland China are routinely slow enough to time
+out. A timeout there doesn't look like a network problem — it looks like "the install ran for
 ten minutes and then failed", which gets misdiagnosed as a broken package every
 time. **So a mirror is the first choice, not the recovery step.** The doctor
 already puts the mirror into the command it prints (and uses); when you install
@@ -61,8 +60,8 @@ by hand, use these:
 
 | What | First choice | Alternative |
 |---|---|---|
-| ffmpeg | **macOS**: `export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles` then `brew install ffmpeg`. **Any platform / no root**: `conda install -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge ffmpeg` — cleanest path, no system package manager touched. | apt sources → Tsinghua/USTC (system-wide change); Windows `winget`/gyan.dev has no mirror concept (use conda) |
-| CJK font | Linux `apt-get install fonts-noto-cjk` (apt mirror helps). mac/Windows already ship 苹方/微软雅黑 — install nothing. | Download NotoSansSC from `github.com/notofonts/noto-cjk` into any directory and point `VE_FONT_DIRS` at it (works without root) |
+| ffmpeg | `winget install --id Gyan.FFmpeg -e` (static build from gyan.dev; no mirror concept — be patient or proxy) | `conda install -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge ffmpeg` — Tsinghua mirror, no system package manager touched |
+| CJK font | Nothing to install — Windows ships 微软雅黑 (msyh.ttc) | Download NotoSansSC from `github.com/notofonts/noto-cjk` into any directory and point `VE_FONT_DIRS` at it |
 | local transcribe CLI | Not a download — it ships with the user's Moss Transcribe WebUI deployment; the fix is PATH or `VE_TRANSCRIBE_CMD` | — |
 
 Notes that matter in practice:
@@ -71,9 +70,9 @@ Notes that matter in practice:
   Plugin code runs inside the plugin `.venv`; a package missing there means
   the venv is stale or broken — run `bootstrap.py --ensure`, don't touch any
   other environment.
-- **Never uninstall or downgrade system packages automatically.** The GUI
-  opencv another project relies on, the distro ffmpeg, someone's patched
-  fontconfig — print the fix command, let the user decide.
+- **Never uninstall or downgrade system packages automatically.** The system
+  ffmpeg, someone's patched toolchain — print the fix command, let the user
+  decide.
 
 ## Workflow
 
@@ -88,8 +87,7 @@ Notes that matter in practice:
    absolute path — the plugin's installed location differs per machine.
 
 2. Read its output **in order**: each line says what's missing, which
-   capability dies without it, and a platform-specific example install
-   command. `[~]`/`[未探测]` lines are skipped checks — fix their
+   capability dies without it, and an example install command. `[~]`/`[未探测]` lines are skipped checks — fix their
    dependency (`needs=`) first and re-run; don't install blind.
 3. Install what's missing **from the table above**, preferring mirrors.
    The doctor prints example commands; the user runs them (or asks you to,
@@ -99,11 +97,9 @@ Notes that matter in practice:
 
 ## Rules
 
-- **A font that resolves is not a font that works.** `fc-match` never fails: ask
-  it for an uninstalled Chinese family and it returns DejaVu Sans, which has no
-  CJK glyphs, and libass then renders blanks while ffmpeg exits 0. The doctor
-  reads the cmap for exactly this reason — if it says the resolved font has no
-  Chinese coverage, treat it as missing even though a path was printed.
+- **A font that resolves is not a font that works.** The doctor reads the
+  font's cmap — if it says the resolved font has no Chinese coverage, treat it
+  as missing even though a path was printed (a tofu-box render still exits 0).
 - **"装了" ≠ "能用"**: a stripped/static ffmpeg build can be on PATH yet lack
   libass — the doctor probes encoders/filters, not just presence. Only
   treat a check as passing when the doctor says so.
@@ -114,22 +110,18 @@ Notes that matter in practice:
   owns them. If a tool fails with `ModuleNotFoundError`, run
   `python3 <plugin_root>/mcp/bootstrap.py --ensure` and retry.
 
-## Fonts: the one platform difference worth knowing
+## Fonts
 
 Font lookup is centralised in `mcp/ve_tools/fonts.py`, searched in this order:
 
 1. `VE_FONT_DIRS` (os.pathsep-separated) — explicit override, always wins
-2. the Linux dirs the kit has always used (`/root/.fonts`, `/usr/share/fonts`)
-3. the platform's own font dirs — `/System/Library/Fonts`, `~/Library/Fonts`
-   (macOS), `%SystemRoot%\Fonts`, `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
-   (Windows)
-4. `fc-list :lang=zh` when fontconfig exists, cmap-verified
+2. Windows system font dirs — `%SystemRoot%\Fonts` and the per-user
+   `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
 
-So **macOS and Windows normally need no font install at all** (苹方 / 微软雅黑
-are found in step 3, and libass resolves them through CoreText/DirectWrite).
-Linux images without `fonts-noto-cjk` are the case that actually needs work.
-When a user has fonts somewhere unusual, `VE_FONT_DIRS` is the answer — not a
-code change, and not `sudo cp` into `/usr/share/fonts`.
+**Windows normally needs no font install at all** — 微软雅黑 is found in step
+2, and libass resolves it through DirectWrite. When a user has fonts somewhere
+unusual, `VE_FONT_DIRS` is the answer — not a code change, and not copying
+files into the system font directory.
 
 ## Anti-patterns
 

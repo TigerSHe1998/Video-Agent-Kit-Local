@@ -62,7 +62,7 @@ def venv_dir() -> Path:
 
 
 def venv_python(vdir: Path) -> Path:
-    return vdir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    return vdir / "Scripts" / "python.exe"
 
 
 def _stamp_path(vdir: Path) -> Path:

@@ -659,17 +659,10 @@ def find_fontfile() -> str | None:
                 str(p) for p in sorted(font_dir.iterdir())
                 if p.is_file() and p.suffix.lower() in {".ttf", ".ttc", ".otf"}
             )
-    candidates.extend([
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    ])
     for candidate in candidates:
         if Path(candidate).is_file():
             return candidate
-    # 上面全是 Linux 路径; mac/Windows 自带的 CJK 字体在别处 (见 fonts.py)。
+    # 系统字体 (微软雅黑等) 由 fonts.py 统一发现
     return find_cjk_font("regular")
 
 
