@@ -1,5 +1,5 @@
 ---
-description: 体检本机系统级环境 — ffmpeg(含编码器与 libass 滤镜)/中文字体真覆盖/本地转录 CLI (transcribe)/磁盘余量, 逐项报"要什么、缺了挂哪个能力、本平台怎么装(默认国内镜像)" (支持 macOS/Windows/Linux; Python 依赖由插件 venv 自举自动管理, 不在此列)
+description: 体检系统级依赖：ffmpeg 编码器、中文字体、转录 CLI。
 skills: sys-setup
 ---
 

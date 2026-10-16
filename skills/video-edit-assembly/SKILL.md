@@ -1,6 +1,11 @@
 ---
 name: video-edit-assembly
-description: Specialized workflow for multi-material video assembly. Use after video-edit-agent classifies a task as combining, selecting, ordering, de-duplicating, or shaping multiple user-provided videos/audio/images into one coherent finished video, montage, recap, social-media cut, or story.
+description: 多素材混剪流程：分组、选材、排序，组装成一个成片。
+when_to_use: >
+  Use after video-edit-agent classifies a task as combining multiple user-provided videos/audio/images into
+  one coherent finished video: montage/合集/混剪/批量素材剪成一条, de-duplication, ordering, pacing,
+  per-source transcription and visual inspection, project-style tracks[] timeline (assets/tracks/markers),
+  then the common validate/render/QC loop. Not for single-source speech condensing or straight captioning.
 ---
 
 # Video Edit Assembly

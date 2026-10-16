@@ -1,6 +1,12 @@
 ---
 name: video-speech-workflows
-description: Consolidated single-source voiced-video workflows for speech condensing, talking-head subtitles, and end-to-end caption/edit orchestration. Use when video-edit-agent routes a single voiced video to mode=speech-condense, mode=talking-head-subtitles, or mode=video-pipeline.
+description: 单源语音视频流程：口播压缩、说话人字幕、端到端管线。
+when_to_use: >
+  Use after video-edit-agent routes a single voiced video to one of: speech-condense (压缩口播/去掉填充词/
+  dead air, hit a target length — condense_index/plan/render/qc with listening checkpoints; the local ASR is
+  segment-timed only, drop_fillers is always refused), talking-head-subtitles (口播视频加字幕: accurate
+  burned-in captions, speaker labels, karaoke on estimated timing, bilingual lines, readability repair), or
+  video-pipeline (underspecified prompts like 处理这个视频/加合适的字幕 that need stage selection).
 ---
 
 # Video Speech Workflows

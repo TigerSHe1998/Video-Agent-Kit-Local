@@ -1,6 +1,15 @@
 ---
 name: sys-setup
-description: Checking and provisioning the machine's SYSTEM-level environment for the video-agent-kit-local plugin — probing for ffmpeg/ffprobe that actually carry the encoders and filters we render with (libx264/aac/libmp3lame, libass, libfreetype), a CJK font whose cmap truly covers Chinese, the local transcribe CLI (Moss Transcribe WebUI) being resolvable on PATH, and free disk space — then telling the user exactly what to install per platform (China mirrors by default). Python dependencies are NOT checked here: they live in the plugin's own .venv, auto-created by mcp/bootstrap.py on first call. Works on macOS, Windows and Linux. Use BEFORE the first edit run on a new machine, or whenever a tool fails in an environment-shaped way — `ffmpeg not found`, `Unknown encoder 'libx264'`, `No such filter: 'subtitles'`, `no font file found for family`, 字幕烧成豆腐块/方块, speech_transcribe 报转录 CLI 未找到. Also use when asked to 检查环境 / 装依赖 / 配国内源 / setup / doctor.
+description: 新机器体检系统级依赖：ffmpeg 编码器/滤镜、中文字体、转录 CLI。
+when_to_use: >
+  Use BEFORE the first edit run on a new machine, or whenever a tool fails in an environment-shaped way:
+  `ffmpeg not found`, `Unknown encoder 'libx264'`, `No such filter: 'subtitles'`, `no font file found for family`,
+  字幕烧成豆腐块/方块, speech_transcribe 报转录 CLI 未找到, transcribe not found. Also use when asked to
+  检查环境 / 装依赖 / 配国内源 / setup / doctor. System-level only: ffmpeg/ffprobe with libx264, aac,
+  libmp3lame and libass/libfreetype filters, a CJK font whose cmap truly covers Chinese, the local transcribe
+  CLI (Moss Transcribe WebUI) on PATH, free disk space. Python deps are NOT checked here (owned by the
+  plugin venv bootstrap; a ModuleNotFoundError fix is mcp/bootstrap.py --ensure, never a global pip install).
+  Per-platform install guidance with China mirrors by default. Works on macOS, Windows and Linux.
 ---
 
 # System Setup (sys-setup)

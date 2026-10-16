@@ -1,5 +1,5 @@
 ---
-description: 使用 video-agent-kit-local 完成视频剪辑任务
+description: 执行一个视频剪辑任务（参数为任务说明）。
 argument-hint: "[任务说明]"
 skills: video-edit-agent
 ---

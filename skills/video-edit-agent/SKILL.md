@@ -1,6 +1,13 @@
 ---
 name: video-edit-agent
-description: Global controller for video editing tasks. Use as the default entrypoint for any video edit request; it discovers materials, classifies the task, routes to specialized video-edit skills when available, and enforces the common file contract, timeline validation, preview rendering, QC, repair loop, and final report.
+description: 视频剪辑总控入口：素材发现、任务分类、剪辑全流程闭环。
+when_to_use: >
+  Default entrypoint for ANY video edit request (剪视频/剪辑/剪出/加字幕/压缩这个视频): discovers materials,
+  classifies the task (multi-material assembly -> video-edit-assembly; single-source speech condensing or
+  talking-head subtitles -> video-speech-workflows), then runs the common workflow: inspect_media,
+  speech_transcribe (local ASR), video_ingest full-video frame inspection, timeline.json, validate_timeline,
+  render_preview, qc_preview, timeline_diff repair loop, out/report.md. Enforces the file contract and
+  completion bar. Use for highlight extraction, reframing/crop, cleanup, general timeline edits.
 ---
 
 # Video Edit Agent

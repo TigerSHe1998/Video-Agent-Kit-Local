@@ -1,7 +1,7 @@
 {
   "name": "video-agent-kit-local",
   "version": "0.1.0",
-  "description": "自动化视频剪辑工具包（本地化）: 本地语音转录、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和字幕。",
+  "description": "本地化视频剪辑工具包：本地转录、抽帧理解、时间线、渲染与质检。",
   "author": {
     "name": "TigerSHe1998",
     "url": "https://github.com/TigerSHe1998"
@@ -24,8 +24,8 @@
     }
   },
   "description_i18n": {
-    "en": "Automated video editing toolkit (local): local speech transcription via Moss Transcribe WebUI, full video frame extraction and understanding, local re-inspection, timeline, preview rendering, QC, and subtitles.",
-    "zh-CN": "自动化视频剪辑工具包（本地化）: 本地语音转录、完整视频抽帧理解、局部复看、时间线、预览渲染、QC 和字幕。"
+    "en": "Local video editing toolkit: local ASR, frame understanding, timeline, render and QC.",
+    "zh-CN": "本地化视频剪辑工具包：本地转录、抽帧理解、时间线、渲染与质检。"
   },
   "mcpServers": {
     "video-edit": {
