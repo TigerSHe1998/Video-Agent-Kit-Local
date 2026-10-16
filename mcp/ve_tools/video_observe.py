@@ -179,7 +179,7 @@ def video_watch_segment(args: dict, ctx: RunContext) -> ToolResult:
         )
 
     base_output = ctx.resolve(
-        args.get("output_json") or f"out/{video_frames_dir_id(src)}_watch.json"
+        args.get("output_json") or f"out/watch/{video_frames_dir_id(src)}_watch.json"
     )
     base_frames_dir = ctx.resolve(
         args.get("save_frames_dir")

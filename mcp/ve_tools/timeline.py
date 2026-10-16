@@ -450,8 +450,8 @@ def check_transition_entries(value: object, issues: list[dict[str, Any]]) -> Non
         if not isinstance(transition, dict):
             issues.append({"severity": "error", "transition": idx, "message": "transition must be an object"})
             continue
-        if not str(transition.get("type") or transition.get("name") or "").strip():
-            issues.append({"severity": "error", "transition": idx, "message": "transition needs type/name"})
+        if not str(transition.get("type") or transition.get("kind") or transition.get("name") or "").strip():
+            issues.append({"severity": "error", "transition": idx, "message": "transition needs type/kind/name"})
         check_positive_number(transition.get("duration"), f"transitions[{idx}].duration", issues)
         at_clip = transition.get("at_clip")
         if at_clip is not None and not is_patch_index(at_clip):

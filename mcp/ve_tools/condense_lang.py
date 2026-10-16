@@ -786,7 +786,12 @@ _TOPIC_EXCLUDE_EN = frozenset(
 def _content_tokens(text: str, language: str) -> set[str]:
     if language == "zh":
         try:
-            import jieba  # noqa: PLC0415
+            import warnings
+
+            # 同 subtitle_style: 旧版 jieba 在新 Python 上的 SyntaxWarning 噪音
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                import jieba  # noqa: PLC0415
 
             tokens = [t.strip() for t in jieba.cut(text) if len(t.strip()) >= 2]
         except Exception:

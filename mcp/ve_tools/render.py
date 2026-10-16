@@ -584,7 +584,7 @@ def drawtext_filter(input_label: str, output_label: str, clip: dict, text_path: 
     x = safe_expr(clip.get("x"), "(w-text_w)/2")
     y = safe_expr(clip.get("y"), "h-text_h-72")
     args = [
-        f"textfile={filter_path(text_path)}",
+        f"textfile='{filter_path(text_path)}'",
         f"fontcolor={fontcolor}",
         f"fontsize={fontsize}",
         "box=1",
@@ -595,7 +595,7 @@ def drawtext_filter(input_label: str, output_label: str, clip: dict, text_path: 
         f"enable='{between_expr(clip)}'",
     ]
     if fontfile:
-        args.insert(0, f"fontfile={filter_path(Path(fontfile))}")
+        args.insert(0, f"fontfile='{filter_path(Path(fontfile))}'")
     return f"[{input_label}]drawtext=" + ":".join(args) + f"[{output_label}]"
 
 
@@ -627,13 +627,15 @@ def filter_number(value: object, default: str) -> str:
 
 
 def filter_path(path: Path) -> str:
-    # Unquoted option value: every filtergraph-special char must be escaped
-    # (backslash first), not just \ : ' — otherwise a crafted path/option can
-    # inject a new filter into -filter_complex.
-    s = str(path)
-    for ch in ("\\", ":", "'", ",", ";", "[", "]"):
-        s = s.replace(ch, "\\" + ch)
-    return s
+    """Path for a quoted filter option value (ass/textfile/fontfile).
+
+    实测 (ffmpeg 9.0.1, Windows): 无引号 + 双反斜杠转义会被分词层吃一层必挂;
+    仅正斜杠时盘符 ``C:`` 的冒号被当选项分隔符也必挂。正确形态是值整体包单引号,
+    引号内盘符冒号写 ``C\\:``, 分隔符用正斜杠。调用方负责放进 '...' 里。
+    """
+    s = str(path).replace("\\", "/")
+    s = s.replace(":", "\\:")
+    return s.replace("'", "'\\''")
 
 
 def filter_string(value: str) -> str:

@@ -26,6 +26,8 @@ Use `video-edit-assembly` when the user provides multiple materials and asks to 
 
 Multi-material assembly has priority over the single-source routes below. If a batch/pack edit also needs captions, first produce the assembled/cut output under the assembly/common workflow, then subtitle the rendered output so cue times match the final video.
 
+Two-phase runs (edit first, then subtitle the rendered output): by then `out/media.json` may already describe the *assembled deliverable's* sources rather than the raw material. That is fine — `inspect_media` also auto-splits per-source probes into `out/media/<source>.json` when the default path already holds a different input, so per-source metadata stays recoverable. Do not delete the earlier file to "fix" the contract; cross-reference it in `out/report.md` instead.
+
 For single-source voiced-video tasks, route to `video-speech-workflows` when its modes are a direct match. Invoke it with the same Skill tool shape and include the mode in args:
 
 | Mode | Use when |

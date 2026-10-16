@@ -115,9 +115,39 @@ def load_args(args_json: str | None, args_file: str | None) -> dict:
         try:
             value = json.loads(args_json)
         except json.JSONDecodeError as exc:
-            raise SystemExit(f"--args-json must be valid JSON: {exc}") from None
+            hint = repair_shell_stripped_quotes(args_json)
+            if hint is not None:
+                return require_json_object(hint, "--args-json (after quote repair)")
+            raise SystemExit(
+                f"--args-json must be valid JSON: {exc}\n"
+                "HINT: if you are in Git Bash / MSYS on Windows, the shell strips inner "
+                "double quotes before the process sees them (common with --args-json "
+                "'{\"key\":\"value\"}'). Prefer --args-file <file> — it is the reliable "
+                "cross-shell form."
+            ) from None
         return require_json_object(value, "--args-json")
     return {}
+
+
+def repair_shell_stripped_quotes(raw: str) -> dict | None:
+    """Heuristic repair for Git Bash → native .exe argument-quote stripping.
+
+    MSYS passes ``--args-json '{"a":"b"}'`` to a native executable as
+    ``{"a":"b"}`` minus the inner double quotes (``{a:b}``), which is not JSON.
+    If re-quoting the bare values yields a valid JSON object, use it; otherwise
+    return None so the caller reports the original error with the --args-file hint.
+    """
+    import shlex
+
+    if '"' in raw:
+        return None  # quotes survived — the problem is something else
+    try:
+        fixed = re.sub(r'([{,]\s*)([A-Za-z_][\w.-]*)\s*:', r'\1"\2":', raw)
+        fixed = re.sub(r':\s*([A-Za-z_][\w./\\-]*)\s*([,}])', r':"\1"\2', fixed)
+        value = json.loads(fixed)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def require_json_object(value: object, source: str) -> dict:

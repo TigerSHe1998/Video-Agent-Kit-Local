@@ -650,8 +650,17 @@ def build_srt(cues: list[dict[str, Any]]) -> str:
 
 
 def ffmpeg_filter_escape(path: str) -> str:
-    """Escape a path for use as an ffmpeg filter argument value."""
-    return path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
+    """Escape a path for an ffmpeg filter option value wrapped in single quotes.
+
+    Windows 路径的坑全在这条链上实测过 (ffmpeg 9.0.1):
+    - 无引号 + 反斜杠/冒号双转义: 分词层吃一层转义, 必挂;
+    - 无引号/有引号 + 仅正斜杠: 盘符 ``C:`` 的冒号被当选项分隔符, 必挂;
+    - 正确形态 (实测通过): 值整体包单引号, 引号内盘符冒号写 ``C\\:``,
+      路径分隔符用正斜杠。调用方负责把结果放进 '...' 里。
+    """
+    forward = str(path).replace("\\", "/")
+    forward = forward.replace(":", "\\:")
+    return forward.replace("'", "'\\''")
 
 
 @functools.lru_cache(maxsize=8)
@@ -795,9 +804,14 @@ def cut_words_tagged(text: str) -> list[tuple[str, str]]:
     functional."""
     try:
         import logging
+        import warnings
 
-        import jieba
-        import jieba.posseg as pseg
+        # 旧版 jieba 在新 Python 上会刷 SyntaxWarning (invalid escape sequence);
+        # 三方库自身的弃用噪音不该进 stderr, 静默之 (不影响其功能)。
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            import jieba
+            import jieba.posseg as pseg
 
         jieba.setLogLevel(logging.ERROR)
         tokens = [(w, f) for w, f in pseg.cut(text) if w]

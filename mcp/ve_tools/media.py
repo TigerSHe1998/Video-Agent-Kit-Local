@@ -186,12 +186,23 @@ def inspect_media(args: dict, ctx: RunContext) -> ToolResult:
     if output_json:
         p = ctx.resolve(output_json)
     else:
+        # 多源任务的默认路径: out/media.json 是"单一主源"约定; 已存在且记录的是
+        # 另一个输入时改落 out/media/<stem>.json, 避免逐源探测互相覆盖 (4 个源
+        # 跑完只剩最后一个的实测教训)。显式传 output_json 永远尊重调用方。
         p = ctx.ensure_output_dir() / "media.json"
+        if p.is_file():
+            try:
+                previous = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                previous = {}
+            prev_input = str(previous.get("input_path") or "")
+            if prev_input and prev_input != str(input_path):
+                p = ctx.ensure_output_dir() / "media" / f"{input_path.stem}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     artifacts.append(str(p))
     return ToolResult(
-        text=f"Inspected media: {ctx.virtualize(input_path)}",
+        text=f"Inspected media: {ctx.virtualize(input_path)} -> {ctx.virtualize(p)}",
         data=out,
         artifacts=artifacts,
     )
@@ -564,7 +575,9 @@ def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
         "job_json": str(job_json_path),
         "language": transcript_payload.get("language") or "",
         **({"requested_language": requested_language} if requested_language else {}),
+        # 本地 ASR (Moss 模型) 无词级时间戳, words 恒为空 —— word_count=0 是预期, 不是转写出错
         "word_count": len(transcript_payload.get("words", [])),
+        "word_level_supported": bool(transcript_payload.get("words")),
         "segment_count": len(transcript_payload.get("segments", [])),
         "n_speakers": len({
             seg.get("speaker") for seg in transcript_payload.get("segments", [])

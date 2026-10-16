@@ -1016,8 +1016,8 @@ def subtitle_render(args: dict, ctx: RunContext) -> ToolResult:
     outputs: dict[str, str] = {}
     if mode in {"burn", "both"}:
         vf = (
-            f"ass=filename={sty.ffmpeg_filter_escape(str(ass_path))}"
-            f":fontsdir={sty.ffmpeg_filter_escape(fonts_dir)}"
+            f"ass=filename='{sty.ffmpeg_filter_escape(str(ass_path))}'"
+            f":fontsdir='{sty.ffmpeg_filter_escape(fonts_dir)}'"
         )
         cmd = [
             "ffmpeg", "-y", "-i", str(video_path),
@@ -1142,6 +1142,9 @@ def subtitle_qc(args: dict, ctx: RunContext) -> ToolResult:
         "video_duration": video_duration,
         "coverage": {k: v for k, v in (coverage or {}).items() if k != "issues"},
         "issues": issues,
+        # errors/warnings 是 issues[] 按 severity 拆出的显式视图, 方便消费方直接取用
+        "errors": errors,
+        "warnings": [i for i in issues if i["severity"] != "error"],
         "error_count": len(errors),
         "warning_count": len(issues) - len(errors),
         "evidence_frames": frames_meta,

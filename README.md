@@ -142,7 +142,7 @@ python "<插件根>/cli/video_agent_tool.py" render_preview --timeline_path out/
 python "<插件根>/cli/video_agent_tool.py" qc_preview --video_path out/preview.mp4 --timeline_path out/timeline.json --pretty
 ```
 
-CLI 的 `--args-json` / `--args-file` 必须是合法 JSON，且顶层必须是 JSON object；非法 JSON 或数组 / 字符串等非对象参数会在入口处直接报错。`--key value` 简写会自动解析 JSON object / array 字符串，所以可以直接传结构化 patch，例如 `--patch '{"add_clips":[...]}'`；复杂参数仍推荐使用 `--args-file`。
+CLI 的 `--args-json` / `--args-file` 必须是合法 JSON，且顶层必须是 JSON object；非法 JSON 或数组 / 字符串等非对象参数会在入口处直接报错。**Windows Git Bash 下 `--args-json` 的内嵌双引号会被 shell 剥掉**（常见报错 "must be valid JSON"；入口带了启发式修复，但不保证覆盖全部形态）——复杂参数请一律用 `--args-file`，它是跨 shell 可靠的形式。`--key value` 简写会自动解析 JSON object / array 字符串，所以可以直接传结构化 patch，例如 `--patch '{"add_clips":[...]}'`；复杂参数仍推荐使用 `--args-file`。
 
 ## 基础视频操作
 
