@@ -27,10 +27,12 @@
       "type": "object",
       "anyOf": [
         { "required": ["type"] },
+        { "required": ["kind"] },
         { "required": ["name"] }
       ],
       "properties": {
         "type": { "type": "string" },
+        "kind": { "type": "string", "description": "Alias of type." },
         "name": { "type": "string" },
         "duration": { "type": "number", "exclusiveMinimum": 0 },
         "params": { "type": "object" }

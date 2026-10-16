@@ -34,7 +34,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "video_ingest": {
-        "description": "Sample the complete video into timestamped contact-sheet images and return them as MCP image content for the Claude Code main model to inspect directly. Standard flow: run transcribe first and pass its output as transcript_path, so every contact sheet is paired with matching speech text; omit transcript arguments only when transcribe reported that the local ASR is unavailable (a transcript-less ingest while ASR is available gets a reminder in the result). Call this once before planning any video edit, and call it again if the video file at that path is overwritten or replaced. Explicit transcript_path must exist. In an MCP session, re-ingesting a video without transcript arguments reuses the transcript previously remembered for that same video fingerprint when available. Full-ingest session state is recorded only after the observation package is successfully produced; failed sampling does not count as full-video visual evidence. The tool is idempotent for the same video/prompt/transcript/settings, preserves every sampled visual observation without blank/near-duplicate folding, and always includes the matching transcript when provided. If the result lists non-inlined image paths, read them before making visual decisions. This tool does not call any model API.",
+        "description": "Sample the complete video into timestamped contact-sheet images and return them as MCP image content for the Claude Code main model to inspect directly. Standard flow: run transcribe first and pass its output as transcript_path, so every contact sheet is paired with matching speech text; omit transcript arguments only when transcribe reported that the local ASR is unavailable (a transcript-less ingest while ASR is available gets a reminder in the result). Call this once before planning any video edit, and call it again if the video file at that path is overwritten or replaced. Explicit transcript_path must exist. In an MCP session, re-ingesting a video without transcript arguments reuses the transcript previously remembered for that same video fingerprint when available. Full-ingest session state is recorded only after the observation package is successfully produced; failed sampling does not count as full-video visual evidence. The tool is idempotent for the same video/prompt/transcript/settings, preserves every sampled visual observation without blank/near-duplicate folding, and always includes the matching transcript when provided. Default observation JSONs land under out/watch/ (out/watch/<video>_watch.json plus per-window suffixes) instead of the out/ root. If the result lists non-inlined image paths, read them before making visual decisions. This tool does not call any model API.",
         "inputSchema": {
             "type": "object",
             "required": ["video_path"],
@@ -199,7 +199,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "subtitle_qc": {
-        "description": "Validate a subtitle package and optionally sample evidence frames from the rendered video. Checks cue timing, visibility, overlap, line overflow using real font metrics, reading-speed warnings, and transcript coverage. Evidence frames must be inspected by the agent.",
+        "description": "Validate a subtitle package and optionally sample evidence frames from the rendered video. Checks cue timing, visibility, overlap, line overflow using real font metrics, reading-speed warnings, and transcript coverage. The report carries issues[] (severity-tagged) plus explicit errors[]/warnings[] arrays and counts. Evidence frames must be inspected by the agent.",
         "inputSchema": {
             "type": "object",
             "required": ["subtitles_path"],
@@ -369,7 +369,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "validate_timeline": {
-        "description": "Validate EDL/timeline project JSON before rendering. Requires ffprobe for source-duration bounds; source duration is read from format duration with stream duration fallback and cached per source file. Pipeline timelines must be JSON objects with non-empty project, assets[], sequence{} or output_canvas{}, tracks[], and at least one video/main track; legacy top-level clips[] is retained only for debug compatibility and does not satisfy the project contract. It validates project/sequence/output_canvas/assets/markers/transitions metadata when provided; tracks and clips must be objects. Checks required clip source/start/end-or-duration/reason fields, rejects boolean/NaN/Infinity time values, checks end-duration consistency, source existence, source-duration bounds, optional timeline placement/effects/transition metadata, and writes a report with the current timeline hash. In tracks[] timelines, clips on non-video tracks (subtitle/overlay/callout plans) may provide non-empty text instead of a media source; video/main track clips always require a source.",
+        "description": "Validate EDL/timeline project JSON before rendering. Requires ffprobe for source-duration bounds; source duration is read from format duration with stream duration fallback and cached per source file. Pipeline timelines must be JSON objects with non-empty project, assets[], sequence{} or output_canvas{}, tracks[], and at least one video/main track; legacy top-level clips[] is retained only for debug compatibility and does not satisfy the project contract. It validates project/sequence/output_canvas/assets/markers/transitions metadata when provided (transition entries accept type/kind/name); tracks and clips must be objects. Checks required clip source/start/end-or-duration/reason fields, rejects boolean/NaN/Infinity time values, checks end-duration consistency, source existence, source-duration bounds, optional timeline placement/effects/transition metadata, and writes a report with the current timeline hash. In tracks[] timelines, clips on non-video tracks (subtitle/overlay/callout plans) may provide non-empty text instead of a media source; video/main track clips always require a source.",
         "inputSchema": {
             "type": "object",
             "required": ["timeline_path"],
@@ -477,7 +477,9 @@ SPEECH_TRANSCRIBE_SCHEMA = {
         "corrected to the full-media timeline; when split, speaker labels are per-split clusters "
         "(p{part}_{speaker}) — the same person may carry different labels across parts. Transient "
         "service failures retry by default; input/usage errors do not. Silent audio returns a valid "
-        "empty transcript flagged silent_audio=true."
+        "empty transcript flagged silent_audio=true. The tool's data summary carries "
+        "word_level_supported (false with the Moss models) so word_count=0 reads as expected, "
+        "never as a transcription failure."
     ),
     "inputSchema": {
         "type": "object",

@@ -51,40 +51,12 @@ def run_proc(cmd: list[str], *args, timeout: float | None = None, **kwargs):
 # ---------------------------------------------------------------------------
 # ffmpeg filtergraph escaping
 #
-# ffmpeg runs its own mini-parser over -vf/-filter_complex strings. Quoting
-# discipline decides whether an agent-authored string can break out of its
-# option and inject new filters (movie=/amovie= → arbitrary local file read /
-# SSRF). Three contexts, three escapers:
+# 路径类选项值 (ass filename/fontsdir, drawtext textfile/fontfile) 的转义在
+# 各模块本地实现 (subtitle_style.ffmpeg_filter_escape / render.filter_path):
+# 正确形态是值整体包单引号 + 引号内盘符冒号转义 + 正斜杠 (Windows 实测, 见
+# 那两个函数的 docstring)。此处不再放通用转义器 —— 曾经的 escape_text /
+# escape_option 用双反斜杠语义, 在 Windows 路径上必挂且已无调用方, 删除以免误用。
 # ---------------------------------------------------------------------------
-
-def escape_text(value) -> str:
-    """Escape arbitrary text for an ffmpeg ``drawtext=text='...'`` value.
-
-    The result must be placed between single quotes in the filtergraph. Inside
-    that quoted region commas/colons are literal, so we only need to neutralise
-    the two chars that can terminate or alter the quote: backslash and the
-    single quote itself. Order matters — backslash first, then the standard
-    close-quote/escaped-quote/reopen trick (``'\\'''``)."""
-    s = "" if value is None else str(value)
-    return s.replace("\\", "\\\\").replace("'", "'\\''")
-
-
-# Chars that are structurally meaningful in an *unquoted* filter option value:
-# they terminate an option (`,`) or a filter (`;`), open/close a labelled pad
-# (`[` `]`), separate option from value (`:`), or start/end quoting (`'`) /
-# escaping (`\`). All must be backslash-escaped.
-_UNQUOTED_SPECIAL = ("\\", ":", "'", ",", ";", "[", "]")
-
-
-def escape_option(value) -> str:
-    """Escape an unquoted ffmpeg filter option value (fontfile path,
-    fontcolor, boxcolor, ...). Backslash is escaped first so the escaping we
-    then insert for the other specials is not itself re-doubled."""
-    s = "" if value is None else str(value)
-    for ch in _UNQUOTED_SPECIAL:
-        s = s.replace(ch, "\\" + ch)
-    return s
-
 
 # drawtext/overlay ``x=`` / ``y=`` hold arithmetic over w/h/text_w/text_h, not
 # new options. Accept the expression chars only; anything that could break out
