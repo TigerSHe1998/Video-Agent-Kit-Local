@@ -16,7 +16,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "analyze_media": {
-        "description": "Run lightweight deterministic planning analysis on a source video/audio file using FFmpeg/ffprobe. It detects scene-change timestamps, derives scene-boundary candidate segments, scans black ranges and silence ranges, and writes a JSON report. These are planning hints only; verify candidate segments with video_ingest/video_watch_segment before final timeline decisions.",
+        "description": "Run deterministic planning analysis on a source video/audio file using FFmpeg/ffprobe. It detects scene-change timestamps, derives scene-boundary candidate segments, scans black ranges and silence ranges, and writes a JSON report. It decodes the whole file three times (scene/black/silence) — minutes on long sources, so call it only when those hints pay for themselves. These are planning hints only; verify candidate segments with video_ingest/video_watch_segment before final timeline decisions.",
         "inputSchema": {
             "type": "object",
             "required": ["input_path"],

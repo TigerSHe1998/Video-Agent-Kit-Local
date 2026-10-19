@@ -82,6 +82,8 @@ All contract artifacts live under `out/` relative to the project directory. Conv
 | `out/preview_qc_report.json` | Deterministic technical QC report. | After preview render. |
 | `out/report.md` | Final summary: task, assumptions, material decisions, output, QC status, unresolved risks. | Last step. |
 
+> This table and the file-contract paragraphs in `docs/AGENT_REFERENCE.md` are two renderings of the same contract — when artifacts are added, renamed, or re-purposed, update both.
+
 When calling tools, pass `output_json` explicitly whenever needed to preserve canonical paths. For multiple sources, inspect each source into `out/media/<source>.json`, transcribe spoken sources into `out/transcripts/<source>.json`, ingest videos into `out/ingest/<source>.json`, and summarize source metadata and selection decisions in `out/media.json`.
 
 `out/video_ingest.json`, `out/ingest/*.json`, and `video_watch_segment` JSON files are tool observation packages. Do not overwrite them with subjective summaries. Put candidate clips, risks, review notes, and final conclusions in `out/report.md` or separate review artifacts.
