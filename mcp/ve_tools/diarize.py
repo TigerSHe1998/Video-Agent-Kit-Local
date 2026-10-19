@@ -260,7 +260,7 @@ def _turn_candidate_windows(units: list[dict[str, Any]], cap: int) -> list[dict[
         if windows and lo <= windows[-1]["end"] + 1.0:
             windows[-1]["end"] = round(max(windows[-1]["end"], hi), 2)
         else:
-            windows.append({"start": round(lo, 2), "end": round(hi, 2), "reasons": ["turn candidate (标签退化，全片需重新归属)"]})
+            windows.append({"start": round(lo, 2), "end": round(hi, 2), "reasons": ["turn candidate (labels likely collapsed; re-attribute the whole video)"]})
     return windows
 
 
@@ -351,22 +351,23 @@ def diarize_audit(args: dict, ctx: RunContext) -> ToolResult:
 
     if not labelled:
         verdict = "no_speaker_labels"
-        note = "转录没有说话人标签，无可审计。"
+        note = "the transcript has no speaker labels; nothing to audit."
     elif likely_collapsed:
         verdict = "likely_collapsed"
         note = (
-            f"一个标签（{max(share_pct, key=share_pct.get)}）占了 {top_share:.0%} 的时长，"
-            "但内容里既有提问又有第一人称回答——像是把一段对话并到了一个人身上。"
-            "标签很可能不可信，建议按下面的窗口看画面重新归属。"
+            f"one label ({max(share_pct, key=share_pct.get)}) holds {top_share:.0%} of the talk time "
+            "while the content contains both questions and first-person answers — a dialogue read as one person. "
+            "The labels are probably unreliable; re-attribute from the frames using the windows below."
         )
     elif flags:
         verdict = "worth_checking"
-        note = f"有 {len(flags)} 处相邻同标签读起来像两个人（见 suspect_flags），其余大体一致。"
+        note = f"{len(flags)} adjacent same-label stretches read like two people (see suspect_flags); the rest is broadly consistent."
     else:
         verdict = "no_obvious_conflict"
         note = (
-            "文本层面未见标签与内容明显冲突——但这只是从文字做的推断，不是免检。"
-            "谁在说话最终以画面为准；若这段的去留取舍依赖说话人身份，仍应抽查窗口。"
+            "no text-level conflict between labels and content — an inference from text alone, not a certificate. "
+            "Who is speaking is ultimately settled by the picture; if keep/drop decisions here depend on speaker "
+            "identity, still spot-check the windows."
         )
 
     report = {
@@ -391,43 +392,47 @@ def diarize_audit(args: dict, ctx: RunContext) -> ToolResult:
     win_txt = "\n".join(
         f"  {w['start']:.1f}-{w['end']:.1f}s  {w['reasons'][0]}"
         for w in windows[:20]
-    ) or "  （无）"
+    ) or "  (none)"
     roster_txt = "\n".join(
-        "  标签 {}（占 {:.0%}）：去 {} 看这是谁".format(
-            r["label"], r["share"],
-            "、".join(f"{w['start']:.1f}-{w['end']:.1f}s" for w in r["sample_windows"]) or "（无干净样本）",
+        "  label {} ({} of talk time): see {} to learn who this is".format(
+            r["label"], f"{r['share']:.0%}",
+            ", ".join(f"{w['start']:.1f}-{w['end']:.1f}s" for w in r["sample_windows"]) or "(no clean sample)",
         )
         for r in roster[:8]
-    ) or "  （无既有标签）"
+    ) or "  (no existing labels)"
     cue_txt = "\n".join(
-        "  {:.1f}s [{}] 名字候选「{}」← “{}”；到 {:.1f}-{:.1f}s 看那时谁在说来核对".format(
+        "  {:.1f}s [{}] name candidate \"{}\" <- \"{}\"; check {:.1f}-{:.1f}s to see who is actually speaking".format(
             c["at"], c["kind"], c["name_guess"], c["quote"],
             c["verify_window"]["start"], c["verify_window"]["end"],
         )
         for c in name_cues[:12]
-    ) or "  （文本里没有自我介绍/点名之类的姓名线索）"
+    ) or "  (no self-intros or name hand-offs found in the text)"
     return ToolResult(
         text=(
-            f"Diarization 证据简报（不是裁决，判断权在你）：{verdict} — {note}\n"
-            f"说话人时长占比：{share_pct}\n\n"
-            f"【人物表】既有标签各去哪看清是谁（先建这张表，再谈归属）：\n{roster_txt}\n\n"
-            f"【姓名线索】文本里的候选，去各自的核对窗确认（念到的名字未必是画面里正在说话的人）：\n{cue_txt}\n\n"
-            f"【待看窗口】值得确认“谁在说”的地方（在这些地方看即可，不必全片）：\n{win_txt}\n\n"
-            "下一步：①先对【人物表】每个标签的样本窗各看一次，记下每个人的画框位置/长相/角标名，建成一张"
-            "『这段视频里有谁』的对照表；②再看【待看窗口】，判断每个窗里说话的人是不是对照表里已有的某位——"
-            "是就复用那个标签/名字（别给同一个人起两个名），只有对不上任何人才新建；③名字候选只有在其核对窗里"
-            "对上了正在说话的人才用，对不上宁可用 A/B/C。把每段 {start,end,speaker} 收集好调 diarize_relabel "
-            "写回。全程不改文字——文字是准的。\n\n"
-            "怎么看：video_watch_segment(video_path=..., fps=4, segments=[...])，多个窗合成一次调用，"
-            "不需要先 video_ingest，只按窗口计费。**fps 至少 4**——2 fps 下说话的嘴和打哈欠的嘴长得一样。"
-            "判据不是「嘴张开了」（听的人也会笑、会喘气、会点头应一声「嗯」），而是"
-            "**整个窗里几乎每一帧口型都在变**，而且**变化的时长要对得上本窗的文字**"
-            "（中文约每秒 4–6 字；若某人只在开头一秒动嘴而这句有 5 秒，那就不是他）。"
-            "若整窗没有任何人在动嘴，别硬选：说话人可能不在画面里，或这里是配音的插播画面。"
-            "窗口尽量卡在**换人处**——一张嘴停、另一张嘴起，一次看出两个结论。"
-            "画面若有平台的「当前说话人」高亮框，它比口型更硬。要读角标/名牌上的字请改用 "
-            "video_read_frames(region=\"name_plate\", upscale=2)，contact sheet 的分辨率会让你把名字猜错。"
-            "看完仍分不清就保留中性标签并在 brief 里写明——错误归属会悄悄污染下游每一处 speaker_change 检查。"
+            f"Diarization evidence brief (not a ruling — the call is yours): {verdict} — {note}\n"
+            f"Speaker time share: {share_pct}\n\n"
+            f"[Roster] where to look to learn who each existing label is (build this cast first, then attribute):\n{roster_txt}\n\n"
+            f"[Name cues] candidates found in the text; confirm each in its verify window (a name merely spoken aloud "
+            f"need not belong to whoever is on screen):\n{cue_txt}\n\n"
+            "Next steps: (1) watch the roster sample windows once per label and note each person's grid position / "
+            "appearance / on-screen name — that is your cast list; (2) then watch the windows worth checking and decide "
+            "whether the person speaking there is someone already on the cast list — reuse that label or name (never give "
+            "one person two names), and mint a new label only when nobody matches; (3) use a name candidate only if its "
+            "verify window shows that person actually speaking; when it does not, fall back to A/B/C. Collect the "
+            "{start,end,speaker} stretches and call diarize_relabel to write them back. The text is never modified — "
+            "the words are accurate.\n\n"
+            "How to look: video_watch_segment(video_path=..., fps=4, segments=[...]), batched into one call — no prior "
+            "video_ingest needed, billing is per window. **fps at least 4** — at 2 fps a talking mouth and a yawning one "
+            "look the same. The signal is not \"mouth open\" (listeners laugh, breathe, nod through an mm-hm) but "
+            "**mouth shape changing on nearly every frame of the window**, and **the duration of that change must match "
+            "the window's text** (Chinese runs about 4-6 syllables/sec; if someone's mouth only moves for the first second "
+            "of a 5-second line, it is not them). If nobody in the window moves their mouth at all, do not force a pick: "
+            "the speaker may be off-camera, or this is a B-roll insert with voice-over. Centre windows on **turn changes** "
+            "where possible — one mouth stops and another starts, two conclusions from one look. A platform "
+            "\"active speaker\" highlight outranks lip reading. To read an on-screen name or lower-third use "
+            "video_read_frames(region=\"name_plate\", upscale=2) — contact-sheet resolution will make you guess the name. "
+            "If it is still ambiguous after watching, keep a neutral label and say so in the brief — a wrong attribution "
+            "silently corrupts every downstream speaker_change check."
         ),
         data=report,
         artifacts=[str(output_json)],
