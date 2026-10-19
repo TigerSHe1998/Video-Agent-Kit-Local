@@ -32,9 +32,11 @@ For single-source voiced-video tasks, route to `video-speech-workflows` when its
 
 | Mode | Use when |
 |---|---|
-| `speech-condense` | One long unscripted recording (podcast, interview, panel, lecture, livestream, verbose talking-head clip) must be cut shorter while preserving continuity, removing filler/repetition/dead air, or hitting a target length. |
-| `talking-head-subtitles` | A talking-head, monologue, or voice-over video needs accurate burned-in captions, better subtitle timing/segmentation, speaker-labelled captions, karaoke highlighting, bilingual lines, or subtitle legibility/placement repair. |
-| `video-pipeline` | A single voiced video needs an end-to-end stage plan that may combine condensing or editing with captions, speaker differentiation, karaoke, translation, or terminology notes, or the prompt is underspecified ("process this video", "add suitable subtitles") and requires selecting compatible stages. |
+| `speech-condense` | One long unscripted recording must be cut shorter (target length, filler/repetition/dead-air removal). |
+| `talking-head-subtitles` | Captions: burned-in subtitles, timing/segmentation repair, speaker labels, karaoke, bilingual lines, legibility. |
+| `video-pipeline` | An end-to-end plan combining stages, or an underspecified request ("process this video") needing stage selection. |
+
+Full triggers and routing examples live in the `video-speech-workflows` skill.
 
 Examples:
 
@@ -50,7 +52,7 @@ Do not wait for strategy confirmation during automated data runs. If the task is
 
 ## Common Hard Rules
 
-1. **Discover materials before editing.** If the user names files or folders, inspect those paths first. Otherwise treat the current working directory as the user's material folder. Prefer `./materials_manifest.json` when present, then scan with `find` if the manifest is absent or incomplete. Exclude generated/runtime directories such as `out`, `.video_agent`, `.claude`, `.git`, and hidden config files. Do not assume `/workspace/input/video.mp4` or a single source file.
+1. **Discover materials before editing.** User-named paths first; otherwise treat the working directory as the material folder and follow Material Discovery below (manifest first, `find` fallback, generated dirs excluded). Never assume a single source file.
 2. **Inspect every relevant source.** Identify videos, audio files, images, and other assets. Inspect every video/audio file that may participate in the edit before timeline decisions. Visually inspect image assets when relevant.
 3. **Do not plan cuts from transcript alone.** Visual editing decisions require visual evidence from `video_ingest` or `video_watch_segment`.
 4. **Protect speech.** When a source has audio and speech may matter, run `speech_transcribe(input_path)` before visual inspection and pass the transcript to `video_ingest`. Silent-audio empty transcripts are valid. If the local ASR is unavailable, continue only with explicit limitations in `out/report.md`; never invent transcript content.
