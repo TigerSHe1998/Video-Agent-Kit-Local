@@ -88,7 +88,13 @@ def main() -> None:
 
     args = load_args(known.args_json, known.args_file)
     args.update(parse_unknown_flags(unknown))
-    result = TOOLS[known.tool](args, RunContext())
+    try:
+        result = TOOLS[known.tool](args, RunContext())
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 工具内部异常也不能是裸 traceback 退出 0
+        print(f"[ERROR] tool {known.tool} crashed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
     payload = {
         "text": result.text,
         "data": result.data,
@@ -100,6 +106,11 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(json.dumps(payload, ensure_ascii=False))
+    # CLI 契约: 工具级报错 (text 以 [ERROR] 开头) 必须反映到退出码 —— 自动化
+    # 管线靠退出码判错, 全量解析 stdout JSON 找错误前缀不是调用方的职责。
+    if result.text.startswith("[ERROR]"):
+        print(f"[ERROR] tool {known.tool} failed; see the JSON result above", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def load_args(args_json: str | None, args_file: str | None) -> dict:

@@ -10,7 +10,7 @@ from typing import Any
 
 from .render import cut_clip, ffconcat_escape, probe_video_size, source_has_audio, source_has_video
 from .result import ToolResult
-from .run_context import RunContext, reject_input_output_collision
+from .run_context import RunContext, media_input_arg, reject_input_output_collision
 from .timeline import file_sha256, media_duration_seconds
 
 
@@ -254,9 +254,10 @@ def op_freeze_frame(args: dict, ctx: RunContext) -> tuple[Path, list[str]]:
 
 
 def require_input_file(args: dict, ctx: RunContext) -> Path:
-    if not args.get("input_path"):
-        raise ValueError("input_path is required")
-    input_path = ctx.resolve(str(args["input_path"]))
+    input_arg = media_input_arg(args)
+    if not input_arg:
+        raise ValueError("input_path (or its alias video_path) is required")
+    input_path = ctx.resolve(input_arg)
     if not input_path.is_file():
         raise ValueError(f"File not found: {input_path}")
     return input_path

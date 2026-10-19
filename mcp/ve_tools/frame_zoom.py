@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from .result import ToolResult
-from .run_context import RunContext
+from .run_context import RunContext, media_input_arg
 
 # Region presets, as (left, top, right, bottom) fractions of the frame. These name
 # the places broadcast and conference video actually put identifying text; a caller
@@ -144,9 +144,9 @@ def video_read_frames(args: dict, ctx: RunContext) -> ToolResult:
     """Return original-resolution frames, one image per timestamp, for reading detail."""
     from PIL import Image
 
-    video_arg = args.get("video_path")
+    video_arg = media_input_arg(args)
     if not video_arg:
-        return ToolResult(text="[ERROR] video_path is required")
+        return ToolResult(text="[ERROR] video_path (or its alias input_path) is required")
     video_path = ctx.resolve(video_arg)
     if not video_path.is_file():
         return ToolResult(text=f"[ERROR] video not found: {video_path}")

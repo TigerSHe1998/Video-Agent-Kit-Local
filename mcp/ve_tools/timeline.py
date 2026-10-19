@@ -466,8 +466,21 @@ def check_transition_entries(value: object, issues: list[dict[str, Any]]) -> Non
         if not isinstance(transition, dict):
             issues.append({"severity": "error", "transition": idx, "message": "transition must be an object"})
             continue
-        if not str(transition.get("type") or transition.get("kind") or transition.get("name") or "").strip():
+        kind = str(transition.get("type") or transition.get("kind") or transition.get("name") or "").strip()
+        if not kind:
             issues.append({"severity": "error", "transition": idx, "message": "transition needs type/kind/name"})
+        elif kind.lower() not in RENDERABLE_TRANSITION_TYPES:
+            # 顶层 transitions[] 目前渲染器不消费 (只认 clip 级 transition_in/out),
+            # 连支持的类型都只是元数据; 未知类型更要标出来
+            issues.append({
+                "severity": "warning",
+                "transition": idx,
+                "message": (
+                    f"transition type '{kind}' is not rendered by render_preview "
+                    f"(supported: {', '.join(sorted(RENDERABLE_TRANSITION_TYPES))}); "
+                    "top-level transitions[] are metadata the renderer does not consume"
+                ),
+            })
         check_positive_number(transition.get("duration"), f"transitions[{idx}].duration", issues)
         at_clip = transition.get("at_clip")
         if at_clip is not None and not is_patch_index(at_clip):
@@ -635,12 +648,28 @@ def check_clip_project_fields(idx: int, clip: dict[str, Any], issues: list[dict[
     check_effects(clip.get("effects"), f"clips[{idx}].effects", issues)
 
 
+# 渲染器 (render.transition_fade_filter) 实际渲染的 transition 类型; 其余类型
+# schema 放行作元数据但渲染时被忽略 —— validate 必须让调用方看见这一点,
+# 否则 "写 zoom → validate 通过 → 渲染静默丢弃" (用户实测踩坑)。
+RENDERABLE_TRANSITION_TYPES = {"fade", "crossfade", "dissolve"}
+
+
 def check_transition_object(value: object, label: str, issues: list[dict[str, Any]]) -> None:
     if not isinstance(value, dict):
         issues.append({"severity": "error", "message": f"{label} must be an object"})
         return
-    if not str(value.get("type") or value.get("kind") or value.get("name") or "").strip():
+    kind = str(value.get("type") or value.get("kind") or value.get("name") or "").strip()
+    if not kind:
         issues.append({"severity": "error", "message": f"{label} needs type/kind/name"})
+    elif kind.lower() not in RENDERABLE_TRANSITION_TYPES:
+        issues.append({
+            "severity": "warning",
+            "message": (
+                f"{label} type '{kind}' is not rendered by render_preview "
+                f"(supported: {', '.join(sorted(RENDERABLE_TRANSITION_TYPES))}); "
+                "it passes validation as metadata but the render ignores it"
+            ),
+        })
     check_positive_number(value.get("duration"), f"{label}.duration", issues)
 
 
@@ -766,7 +795,11 @@ def timeline_diff(args: dict, ctx: RunContext) -> ToolResult:
     if not args.get("timeline_path"):
         return ToolResult(text="[ERROR] timeline_path is required")
     if not args.get("instructions"):
-        return ToolResult(text="[ERROR] instructions is required")
+        return ToolResult(
+            text="[ERROR] instructions is required: a short natural-language note of what this "
+                 "diff changes and why (e.g. 'drop the 12s dead-air span in u014-u016; retime the "
+                 "following clip to close the gap'), stored verbatim in the diff report for audit"
+        )
     timeline_path = ctx.resolve(args["timeline_path"])
     if not timeline_path.is_file():
         return ToolResult(text=f"[ERROR] timeline not found: {timeline_path}")

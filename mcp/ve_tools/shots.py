@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 from .result import ToolResult
-from .run_context import RunContext
+from .run_context import RunContext, media_input_arg
+
 
 # 与 movie_cut 保持同一版本串: 两边产物可互相复用缓存, 改合并算法时必须换版本号
 SEGMENT_VERSION = "cover-all-v2"
@@ -24,9 +25,10 @@ PROBE_TIMEOUT_SECONDS = 60
 
 
 def detect_shots(args: dict, ctx: RunContext) -> ToolResult:
-    if not args.get("input_path"):
-        return ToolResult(text="[ERROR] input_path is required")
-    input_path = ctx.resolve(args["input_path"])
+    input_arg = media_input_arg(args)
+    if not input_arg:
+        return ToolResult(text="[ERROR] input_path (or its alias video_path) is required")
+    input_path = ctx.resolve(input_arg)
     if not input_path.is_file():
         return ToolResult(text=f"[ERROR] File not found: {input_path}")
     if not shutil.which("ffprobe"):

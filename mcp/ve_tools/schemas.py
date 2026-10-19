@@ -7,9 +7,13 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Inspect a video or audio file with ffprobe and return structured media metadata plus a concise summary and technical risk list. Duration prefers format duration, falls back to stream duration, and ignores NaN/Infinity values. The summary includes duration, dimensions, fps, codecs, audio layout, pixel/color metadata, and rotation when available; risks flag no-audio/no-video, odd dimensions, possible VFR, HDR transfer metadata, and large-source cost.",
         "inputSchema": {
             "type": "object",
-            "required": ["input_path"],
+            "anyOf": [
+                {"required": ["input_path"]},
+                {"required": ["video_path"]}
+            ],
             "properties": {
-                "input_path": {"type": "string"},
+                "input_path": {"type": "string", "description": "Media file path. video_path is accepted as an alias."},
+                "video_path": {"type": "string", "description": "Alias of input_path."},
                 "output_json": {"type": "string"}
             },
             "additionalProperties": False
@@ -19,9 +23,13 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Run deterministic planning analysis on a source video/audio file using FFmpeg/ffprobe. It detects scene-change timestamps, derives scene-boundary candidate segments, scans black ranges and silence ranges, and writes a JSON report. It decodes the whole file three times (scene/black/silence) — minutes on long sources, so call it only when those hints pay for themselves. These are planning hints only; verify candidate segments with video_ingest/video_watch_segment before final timeline decisions.",
         "inputSchema": {
             "type": "object",
-            "required": ["input_path"],
+            "anyOf": [
+                {"required": ["input_path"]},
+                {"required": ["video_path"]}
+            ],
             "properties": {
-                "input_path": {"type": "string"},
+                "input_path": {"type": "string", "description": "Media file path. video_path is accepted as an alias."},
+                "video_path": {"type": "string", "description": "Alias of input_path."},
                 "output_json": {"type": "string"},
                 "scene_threshold": {
                     "type": "number",
@@ -37,9 +45,13 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Sample the complete video into timestamped contact-sheet images and return them as MCP image content for the main model to inspect directly. Standard flow: run transcribe first and pass its output as transcript_path, so every contact sheet is paired with matching speech text; omit transcript arguments only when transcribe reported that the local ASR is unavailable (a transcript-less ingest while ASR is available gets a reminder in the result). Call this once before planning any video edit, and call it again if the video file at that path is overwritten or replaced. Explicit transcript_path must exist. In an MCP session, re-ingesting a video without transcript arguments reuses the transcript previously remembered for that same video fingerprint when available. Full-ingest session state is recorded only after the observation package is successfully produced; failed sampling does not count as full-video visual evidence. The tool is idempotent for the same video/prompt/transcript/settings, preserves every sampled visual observation without blank/near-duplicate folding, and always includes the matching transcript when provided. Default observation JSON is out/video_ingest.json (pass an explicit output_json for multi-source runs). Read any non-inlined image paths listed in the result before making visual decisions; no model API is called.",
         "inputSchema": {
             "type": "object",
-            "required": ["video_path"],
+            "anyOf": [
+                {"required": ["video_path"]},
+                {"required": ["input_path"]}
+            ],
             "properties": {
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "transcript_path": {"type": "string"},
                 "transcript_text": {"type": "string"},
                 "prompt": {"type": "string"},
@@ -57,7 +69,8 @@ TOOL_SCHEMAS: dict[str, dict] = {
             "properties": {
                 "start_time": {"type": "number", "minimum": 0},
                 "end_time": {"type": "number", "minimum": 0},
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "transcript_path": {"type": "string"},
                 "transcript_text": {"type": "string"},
                 "segments": {
@@ -138,9 +151,14 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Cheap subtitle-placement scout for a local video. Samples representative frames, returns an overview strip plus a native-width caption-band strip, measures band luminance, reports shot cuts, and suggests concrete style overrides for contrast/font-size before building subtitles. This tool does not call any model API.",
         "inputSchema": {
             "type": "object",
-            "required": ["video_path"],
+            "type": "object",
+            "anyOf": [
+                {"required": ["video_path"]},
+                {"required": ["input_path"]}
+            ],
             "properties": {
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "preset": {
                     "type": "string",
                     "enum": ["shortform_zh", "broadcast", "broadcast_en"],
@@ -159,10 +177,13 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Build a subtitle package from timed transcript segments and a source video. Produces subtitles.json plus ASS/SRT sidecars, using punctuation-aware and word-boundary-aware cue segmentation, font-aware width measurement, and silence-snapped cue boundaries. Read the returned cue table before rendering.",
         "inputSchema": {
             "type": "object",
-            "required": ["transcript_path", "video_path"],
+            "type": "object",
+            "required": ["transcript_path"],
+            "allOf": [{"anyOf": [{"required": ["video_path"]}, {"required": ["input_path"]}]}],
             "properties": {
                 "transcript_path": {"type": "string"},
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "preset": {
                     "type": "string",
                     "enum": ["shortform_zh", "broadcast", "broadcast_en"],
@@ -185,9 +206,12 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Render subtitles from subtitles.json onto a local video. Burn-in mode re-emits ASS from cues[] every time so hand edits to subtitles.json take effect; soft mode muxes a mov_text subtitle track.",
         "inputSchema": {
             "type": "object",
-            "required": ["video_path", "subtitles_path"],
+            "type": "object",
+            "required": ["subtitles_path"],
+            "allOf": [{"anyOf": [{"required": ["video_path"]}, {"required": ["input_path"]}]}],
             "properties": {
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "subtitles_path": {"type": "string"},
                 "output_path": {"type": "string"},
                 "mode": {"type": "string", "enum": ["burn", "soft", "both"], "default": "burn"},
@@ -205,7 +229,8 @@ TOOL_SCHEMAS: dict[str, dict] = {
             "required": ["subtitles_path"],
             "properties": {
                 "subtitles_path": {"type": "string"},
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path (optional evidence sampling source). input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "output_json": {"type": "string"},
                 "frames_dir": {"type": "string"},
                 "max_evidence_frames": {"type": "integer", "minimum": 1}
@@ -217,9 +242,14 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Index a long spoken video for condensing. Splits timed transcript into sentence-like units using punctuation and detected pauses, finds disfluency/repetition/topic hints, computes a lossless compression floor, runs a coarse visual survey, and writes speech_index.json plus a full markdown unit table.",
         "inputSchema": {
             "type": "object",
-            "required": ["video_path"],
+            "type": "object",
+            "anyOf": [
+                {"required": ["video_path"]},
+                {"required": ["input_path"]}
+            ],
             "properties": {
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "transcript_path": {"type": "string", "default": "out/transcript.json"},
                 "language": {"type": "string"},
                 "unit_pause_seconds": {"type": "number", "exclusiveMinimum": 0},
@@ -349,9 +379,14 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Read a few original-resolution frames, optionally cropped/upscaled, for inspecting small on-screen text such as name plates, lower-thirds, UI labels, or slide text. Use video_watch_segment for motion; use this when the task is reading detail.",
         "inputSchema": {
             "type": "object",
-            "required": ["video_path"],
+            "type": "object",
+            "anyOf": [
+                {"required": ["video_path"]},
+                {"required": ["input_path"]}
+            ],
             "properties": {
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Video file path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "timestamps": {"type": "array", "items": {"type": "number", "minimum": 0}},
                 "start_time": {"type": "number", "minimum": 0},
                 "end_time": {"type": "number", "minimum": 0},
@@ -381,7 +416,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "render_preview": {
-        "description": "Render a preview video from timeline JSON using FFmpeg/ffprobe. Project-style tracks[] timelines are rendered as a basic editing project: video/main clips are placed on a black sequence canvas by timeline_start with boundary padding, original video audio plus audio/music/voiceover tracks are internally pre-baked into full-length positioned wav beds before mixing, subtitle/text tracks are composited with drawtext, and image/overlay tracks are composited with overlay enable windows. The renderer writes preview.render_report.json, preview.render_plan.json, and preview.edit_decisions.json for traceability. It supports simple fade transition_in/transition_out, clip speed, volume, opacity, output_canvas/sequence canvas and fps. Pipeline timelines must satisfy the project contract; top-level clips[] are legacy/debug compatibility only. Unsupported unknown track types are recorded in the render plan rather than silently rendered.",
+        "description": "Render a preview video from timeline JSON using FFmpeg/ffprobe. Project-style tracks[] timelines are rendered as a basic editing project: video/main clips are placed on a black sequence canvas by timeline_start with boundary padding, original video audio plus audio/music/voiceover tracks are internally pre-baked into full-length positioned wav beds before mixing, subtitle/text tracks are composited with drawtext, and image/overlay tracks are composited with overlay enable windows. The renderer writes preview.render_report.json, preview.render_plan.json, and preview.edit_decisions.json for traceability. It supports simple fade transition_in/transition_out, clip speed, volume, opacity, output_canvas/sequence canvas and fps. Pipeline timelines must satisfy the project contract; top-level clips[] are legacy/debug compatibility only. Unsupported unknown track types are recorded in the render plan rather than silently rendered. Text/subtitle track clips support per-clip styling through fontsize (default 42; alias font_size), fontcolor (default white; ffmpeg color, alias font_color), boxcolor (default black@0.55; alias box_color), and x/y drawtext position expressions (defaults '(w-text_w)/2' and 'h-text_h-72'). transition_in/transition_out render only type fade/crossfade/dissolve (all map to a fade); other types are ignored by the renderer and flagged by validate_timeline.",
         "inputSchema": {
             "type": "object",
             "required": ["timeline_path"],
@@ -399,9 +434,14 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": "Run deterministic QC on a preview/final video: ffprobe metadata, black frame scan, short edit-boundary black-frame scan (short blacks are attributed to video-track cut points within ±0.08 s), silence scan, freeze-frame scan, volume peak/mean scan, audio stream coverage, timeline/render hash binding, and expected duration/resolution/fps checks against the timeline. Media probe failures and scan failures are blocking; black/silence/freeze/clipping/very-low-volume findings become warning issues unless they indicate a scan failure; audio ending before the video is an error. The silence/volume scans only run when an audio stream exists; a video without any audio stream is reported as a warning. Pass timeline_path so the QC report can prove which timeline produced the preview and compare output media against timeline sequence expectations.",
         "inputSchema": {
             "type": "object",
-            "required": ["video_path"],
+            "type": "object",
+            "anyOf": [
+                {"required": ["video_path"]},
+                {"required": ["input_path"]}
+            ],
             "properties": {
-                "video_path": {"type": "string"},
+                "video_path": {"type": "string", "description": "Preview/final video path. input_path is accepted as an alias."},
+                "input_path": {"type": "string", "description": "Alias of video_path."},
                 "timeline_path": {"type": "string"},
                 "output_json": {"type": "string"}
             },
@@ -415,7 +455,10 @@ TOOL_SCHEMAS: dict[str, dict] = {
             "required": ["timeline_path", "instructions"],
             "properties": {
                 "timeline_path": {"type": "string"},
-                "instructions": {"type": "string"},
+                "instructions": {
+                    "type": "string",
+                    "description": "Required. A short natural-language note of what this diff changes and why, stored verbatim in the diff report for audit (the patch is the machine-readable change; this is the human/agent-readable reason).",
+                },
                 "patch": {"type": "object"},
                 "apply": {"type": "boolean", "default": False},
                 "output_json": {"type": "string"}
@@ -439,8 +482,12 @@ EXTRA_TOOL_SCHEMAS: dict[str, dict] = {'detect_shots': {'description': 'Detect s
                                  'up detection by skipping frames at the cost of cut precision. This tool does not '
                                  'call any model API; requires ffprobe and the scenedetect package.',
                   'inputSchema': {'type': 'object',
-                                  'required': ['input_path'],
-                                  'properties': {'input_path': {'type': 'string'},
+                                  'anyOf': [{'required': ['input_path']},
+                                            {'required': ['video_path']}],
+                                  'properties': {'input_path': {'type': 'string',
+                                                                'description': 'Video file path. video_path is accepted as an alias.'},
+                                                 'video_path': {'type': 'string',
+                                                                'description': 'Alias of input_path.'},
                                                  'output_json': {'type': 'string', 'default': 'out/shots.json'},
                                                  'threshold': {'type': 'number',
                                                                'exclusiveMinimum': 0,
@@ -486,11 +533,15 @@ SPEECH_TRANSCRIBE_SCHEMA = {
         "word_level_supported (false with the Moss models) so word_count=0 reads as expected, "
         "never as a transcription failure."
     ),
-    "inputSchema": {
+        "inputSchema": {
         "type": "object",
-        "required": ["input_path"],
+        "anyOf": [
+            {"required": ["input_path"]},
+            {"required": ["video_path"]}
+        ],
         "properties": {
-            "input_path": {"type": "string"},
+            "input_path": {"type": "string", "description": "Media file path. video_path is accepted as an alias."},
+            "video_path": {"type": "string", "description": "Alias of input_path."},
             "output_json": {"type": "string"},
             "provider": {
                 "type": "string",

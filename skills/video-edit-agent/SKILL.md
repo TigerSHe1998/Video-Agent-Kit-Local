@@ -129,6 +129,8 @@ The reason must cite editorial purpose, not just restate timestamps. All times m
 
 The preview renderer consumes basic project timelines: video/main tracks by `timeline_start`, source clip audio and audio/music/voiceover tracks as full-length positioned audio beds, subtitle/text tracks with drawtext, and image/overlay tracks by enable windows. Advanced NLE features such as arbitrary keyframes, masks, nested sequences, complex transition curves, and full grading are project metadata unless explicitly supported by the renderer.
 
+Text/subtitle track clips are styled per clip through `fontsize` (default 42; alias `font_size`), `fontcolor` (default `white`; ffmpeg color syntax such as `white` or `0xRRGGBB`, alias `font_color`), `boxcolor` (default `black@0.55`, alpha supported; alias `box_color`), and `x`/`y` drawtext position expressions (defaults `(w-text_w)/2` and `h-text_h-72`; numeric values are also accepted). Any other per-clip style key is project metadata the renderer ignores. `transition_in`/`transition_out` render only `fade`/`crossfade`/`dissolve` (all map to a fade); other types pass validation as metadata but the renderer ignores them — `validate_timeline` flags each such transition with a warning, and the fix is to switch to a supported type or remove the transition.
+
 ### Render, QC, And Repair
 
 Run:

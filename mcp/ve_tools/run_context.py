@@ -9,6 +9,22 @@ from pathlib import Path
 # 只存 path 的话, 窗口级 range 过滤会重读出另一个视频的语音。
 TranscriptMemory = tuple[Path | None, str, str | None]
 
+# 媒体源参数的两等价别名: 同一概念历史上两套工具两套名 (inspect/analyze/
+# speech_transcribe/detect_shots 用 input_path, 其余用 video_path), 调用方必踩。
+# 现在所有工具两个名字都收; 每个工具保留各自的主名 (schema required 与默认
+# 路径字段不变), 别名仅作输入。
+MEDIA_INPUT_KEYS = ("video_path", "input_path")
+
+
+def media_input_arg(args: dict) -> str | None:
+    """媒体源参数: video_path / input_path 二选一, 都接受。"""
+    for key in MEDIA_INPUT_KEYS:
+        value = args.get(key)
+        if value:
+            return str(value)
+    return None
+
+
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 
 

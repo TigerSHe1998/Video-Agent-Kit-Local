@@ -9,14 +9,15 @@ from pathlib import Path
 from .media import inspect_media
 from .render import source_has_audio, source_has_video
 from .result import ToolResult
-from .run_context import RunContext
+from .run_context import RunContext, media_input_arg
 from .timeline import file_sha256, load_timeline, normalize_track_type, timeline_clips, VIDEO_TRACK_TYPES
 
 
 def qc_preview(args: dict, ctx: RunContext) -> ToolResult:
-    if not args.get("video_path"):
-        return ToolResult(text="[ERROR] video_path is required")
-    video_path = ctx.resolve(args["video_path"])
+    video_arg = media_input_arg(args)
+    if not video_arg:
+        return ToolResult(text="[ERROR] video_path (or its alias input_path) is required")
+    video_path = ctx.resolve(video_arg)
     if not video_path.is_file():
         return ToolResult(text=f"[ERROR] video not found: {video_path}")
     timeline_path: Path | None = None

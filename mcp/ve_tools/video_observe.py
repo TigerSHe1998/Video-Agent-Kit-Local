@@ -15,7 +15,7 @@ from typing import Any
 
 from .fonts import find_cjk_font
 from .result import ToolResult
-from .run_context import RunContext
+from .run_context import RunContext, media_input_arg
 from .transcript import read_transcript_text, transcript_text_for_range
 
 MAX_INLINE_IMAGES = 600
@@ -55,9 +55,10 @@ class SampledFrame:
 
 def video_ingest(args: dict, ctx: RunContext) -> ToolResult:
     """Sample the full video and return timestamped image sheets to the host agent."""
-    if not args.get("video_path"):
-        return ToolResult(text="[ERROR] video_path is required")
-    video_path = ctx.resolve(args["video_path"])
+    video_arg = media_input_arg(args)
+    if not video_arg:
+        return ToolResult(text="[ERROR] video_path (or its alias input_path) is required")
+    video_path = ctx.resolve(video_arg)
     if not video_path.is_file():
         return ToolResult(text=f"[ERROR] video not found: {video_path}")
 
@@ -116,8 +117,9 @@ def append_transcribe_nudge(result: ToolResult, ctx: RunContext | None = None) -
 
 def video_watch_segment(args: dict, ctx: RunContext) -> ToolResult:
     """Sample a local segment at higher FPS and return timestamped image sheets."""
-    if args.get("video_path"):
-        video_path = ctx.resolve(args["video_path"])
+    video_arg = media_input_arg(args)
+    if video_arg:
+        video_path = ctx.resolve(video_arg)
         if not video_path.is_file():
             return ToolResult(text=f"[ERROR] video not found: {video_path}")
         visually_ingested = ctx.video_was_visually_ingested(video_path)
@@ -477,6 +479,26 @@ def merge_watch_results(
     return ToolResult(text=text, data=data, artifacts=artifacts, image_paths=image_paths)
 
 
+# CLI 单行 JSON 输出里几百项的采样索引数组纯属刷屏 (一次结果几十 KB):
+# 超过截断阈值的数组换成计数 + 落盘 JSON 指针。MCP 结果不经过这里。
+CLI_ARRAY_SUMMARY_LIMIT = 20
+
+
+def summarize_media_for_cli(media: dict) -> dict:
+    """CLI 输出用 media 摘要: 长数组截断为前若干项 + 总数, 其余读观察 JSON。"""
+    out = dict(media)
+    for key in ("raw_frame_indices", "raw_frame_timestamps_sec", "prod_frame_indices"):
+        value = out.get(key)
+        if isinstance(value, list) and len(value) > CLI_ARRAY_SUMMARY_LIMIT:
+            out[key] = {
+                "truncated": True,
+                "count": len(value),
+                "first": value[:CLI_ARRAY_SUMMARY_LIMIT],
+                "note": f"full list of {len(value)} entries is in the observation JSON (media.{key})",
+            }
+    return out
+
+
 def build_video_observation(
     *,
     ctx: RunContext,
@@ -543,10 +565,22 @@ def build_video_observation(
         if original_time_range else
         "Frame timestamps are source-video timestamps."
     )
+    # 文案必须与实际投递方式一致: MCP 会话里 sheets 由宿主内联进工具结果;
+    # CLI 模式没有内联通道, 图已落盘, 说 "inlined below" 会让照文案写解析的
+    # 调用方扑空。
+    if ctx.session_kind == "mcp":
+        delivery = (
+            "The sheets are inlined below for the main model to inspect; "
+            "this tool did not call any model API."
+        )
+    else:
+        delivery = (
+            "The sheets are saved to disk (no inline channel in CLI mode); "
+            "read the paths below to inspect them."
+        )
     text = (
         f"{label} completed: sampled {sampled_frame_count} frame(s) and built {len(sheets)} timestamped "
-        f"contact sheet(s). The sheets are inlined below for the main model to inspect; "
-        "this tool did not call any model API.\n\n"
+        f"contact sheet(s). {delivery}\n\n"
         f"Observation JSON: {ctx.virtualize(output_json)}\n"
         f"Sheets:\n{sheet_lines}\n\n"
         f"{frame_note}\n"
@@ -561,19 +595,24 @@ def build_video_observation(
     )
     if reused:
         text += "\n\n[note] Reused previously generated contact sheet(s) for the same video, time range, prompt, transcript, and sampling settings."
+    data = {
+        "tool": label,
+        "output_json": str(output_json),
+        "video_path": str(video_path),
+        "used_time_range": media.get("source_time_range"),
+        "image_count": len(sheets),
+        "sampled_frames": sampled_frame_count,
+        # CLI 单行输出的刷屏主源: 长采样数组换摘要, 完整表在观察 JSON 里
+        "media": summarize_media_for_cli(media) if ctx.session_kind != "mcp" else media,
+        # 落盘观察 JSON 的 sheet_paths 有, 工具结果 data 没有 —— 从 data 层解析的
+        # 调用方拿不到 sheet 路径, 只能二次读 JSON (用户实测踩坑)
+        "sheet_paths": [str(path) for path in sheets],
+        "reused": reused,
+        **(extra_data or {}),
+    }
     return ToolResult(
         text=text,
-        data={
-            "tool": label,
-            "output_json": str(output_json),
-            "video_path": str(video_path),
-            "used_time_range": media.get("source_time_range"),
-            "image_count": len(sheets),
-            "sampled_frames": sampled_frame_count,
-            "media": media,
-            "reused": reused,
-            **(extra_data or {}),
-        },
+        data=data,
         artifacts=[str(output_json), str(frames_dir)],
         image_paths=[str(path) for path in sheets],
     )

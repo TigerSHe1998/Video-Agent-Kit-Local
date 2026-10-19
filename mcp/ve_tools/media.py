@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .result import ToolResult
-from .run_context import RunContext, clean_env
+from .run_context import RunContext, clean_env, media_input_arg
 from .local_asr import local_asr_transcribe_payload
 from .transcript import read_transcript_text
 
@@ -162,9 +162,10 @@ def message_retryable(message: object) -> bool:
 
 
 def inspect_media(args: dict, ctx: RunContext) -> ToolResult:
-    if not args.get("input_path"):
-        return ToolResult(text="[ERROR] input_path is required")
-    input_path = ctx.resolve(args["input_path"])
+    input_arg = media_input_arg(args)
+    if not input_arg:
+        return ToolResult(text="[ERROR] input_path (or its alias video_path) is required")
+    input_path = ctx.resolve(input_arg)
     if not input_path.is_file():
         return ToolResult(text=f"[ERROR] File not found: {input_path}")
     if not shutil.which("ffprobe"):
@@ -227,9 +228,10 @@ def inspect_media(args: dict, ctx: RunContext) -> ToolResult:
 
 def analyze_media(args: dict, ctx: RunContext) -> ToolResult:
     """Lightweight deterministic source analysis for planning, not a semantic judge."""
-    if not args.get("input_path"):
-        return ToolResult(text="[ERROR] input_path is required")
-    input_path = ctx.resolve(args["input_path"])
+    input_arg = media_input_arg(args)
+    if not input_arg:
+        return ToolResult(text="[ERROR] input_path (or its alias video_path) is required")
+    input_path = ctx.resolve(input_arg)
     if not input_path.is_file():
         return ToolResult(text=f"[ERROR] File not found: {input_path}")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -501,9 +503,10 @@ def transcribe(args: dict, ctx: RunContext) -> ToolResult:
 
 def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
     """Transcribe a media file with the local transcribe CLI (Moss WebUI backend)."""
-    if not args.get("input_path"):
-        return ToolResult(text="[ERROR] input_path is required")
-    input_path = ctx.resolve(args["input_path"])
+    input_arg = media_input_arg(args)
+    if not input_arg:
+        return ToolResult(text="[ERROR] input_path (or its alias video_path) is required")
+    input_path = ctx.resolve(input_arg)
     if not input_path.is_file():
         return ToolResult(text=f"[ERROR] File not found: {input_path}")
     output_path = ctx.resolve(args.get("output_json") or "out/transcript.json")
