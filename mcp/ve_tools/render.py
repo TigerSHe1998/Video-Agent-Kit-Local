@@ -30,7 +30,7 @@ def render_preview(args: dict, ctx: RunContext) -> ToolResult:
         return ToolResult(text="[ERROR] timeline_path is required")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         return ToolResult(text="[ERROR] ffmpeg/ffprobe not found on PATH")
-    # Fail fast before a long encode: minimal/conda builds often drop libx264.
+    # Fail fast before a long encode: minimal/stripped builds often drop libx264.
     cap_err = require_ffmpeg(encoders=("libx264", "aac"))
     if cap_err:
         return ToolResult(text=cap_err)

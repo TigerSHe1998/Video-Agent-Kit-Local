@@ -39,10 +39,20 @@ REQUIREMENTS = PLUGIN_ROOT / "requirements.txt"
 # 否则会把 GUI 版 opencv 盖到 opencv-python-headless 的 cv2 上。
 EXTRA_SPECS = ("scenedetect>=0.6",)
 
-DEFAULT_PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
+# 官方 PyPI; 特殊网络 (企业代理等) 可用 VE_PIP_INDEX 覆盖, 不内置第三方镜像。
+DEFAULT_PIP_INDEX = "https://pypi.org/simple"
 STAMP_NAME = ".vak-stamp"
 BUILD_LOCK = ".vak-build.lock"
 BUILD_WAIT_TIMEOUT_S = 1800.0
+# 锁内记录的进程死了 → 立即判定过期; 记录读不出/判不了 → mtime 兜底。
+# 活着的持锁进程不回收 (构建慢不等于死了, 抢过来会变成两个 pip 写同一 venv)。
+STALE_LOCK_SECONDS = 1800.0
+# 锁内记录的是持锁进程的**创建时刻** (不是抢锁时刻 —— 进程可能跑了很久才来
+# 抢锁), 与查询到的创建时刻同源比对, 容差只吸收时钟换算误差; 也顺带防 PID
+# 复用: 同号新进程的创建时刻对不上 → 记录里的那个已死。
+LOCK_START_TOLERANCE_S = 60.0
+# 抢锁失败且持锁方没建成 (崩溃/安装失败/锁过期回收) 时重新抢锁接管的次数上限。
+MAX_TAKEOVERS = 3
 
 ACTIVE_ENV = "VE_VENV_ACTIVE"
 REPAIRS_ENV = "VE_VENV_REPAIRS"
@@ -107,66 +117,212 @@ def _stamp_ok(vdir: Path) -> bool:
         return False
 
 
+def _read_lock_record(lock: Path) -> tuple[int, float] | None:
+    """锁文件里记的 (pid, 进程创建时刻 unix 秒); 旧版空锁/损坏锁 → None (走 mtime 兜底)。"""
+    try:
+        parts = lock.read_text(encoding="utf-8").split()
+        return int(parts[0]), float(parts[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+_K32 = None
+
+
+def _win_kernel32():
+    """(kernel32, FILETIME) 原型就绪, 模块级缓存; 非 Windows → None。"""
+    global _K32
+    if _K32 is None:
+        if os.name != "nt":
+            return None
+        import ctypes
+        import ctypes.wintypes as wt
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("low", wt.DWORD), ("high", wt.DWORD)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wt.HANDLE
+        k32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+        k32.GetProcessTimes.restype = wt.BOOL
+        k32.GetProcessTimes.argtypes = [wt.HANDLE] + [
+            ctypes.POINTER(FILETIME)] * 4
+        k32.CloseHandle.argtypes = [wt.HANDLE]
+        _K32 = (k32, FILETIME)
+    return _K32
+
+
+def _own_creation_unix() -> float | None:
+    """本进程创建时刻 (unix 秒); 非 Windows / 查询失败 → None (锁里记 0, 判定降级)。"""
+    win = _win_kernel32()
+    if win is None:
+        return None
+    k32, FILETIME = win
+    import ctypes
+
+    try:
+        created, exited, _k, _u = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+        # GetCurrentProcess 伪句柄, 无需 CloseHandle
+        if not k32.GetProcessTimes(k32.GetCurrentProcess(), ctypes.byref(created),
+                                   ctypes.byref(exited), ctypes.byref(_k), ctypes.byref(_u)):
+            return None
+        return ((created.high << 32) | created.low) / 1e7 - 11644473600.0
+    except Exception:
+        return None
+
+
+def _process_alive(pid: int, created: float) -> bool | None:
+    """持锁进程是否还活着 (Windows)。True/False = 判定成功; None = 判不了
+    (非 Windows / 权限拒绝 / ctypes 异常), 调用方回退 mtime 兜底。
+
+    created > 0 时比对进程创建时间防 PID 复用; 记录里没有 (旧版/降级写 0)
+    就只看 pid 存在与否。
+    """
+    win = _win_kernel32()
+    if win is None:
+        return None
+    k32, FILETIME = win
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_INVALID_PARAMETER = 87
+    try:
+        handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            # 87 = PID 不存在 (死了); 其他错误 (拒绝访问等) 判不了
+            if ctypes.get_last_error() != ERROR_INVALID_PARAMETER:
+                return None
+            return False
+        try:
+            c, exited, _k, _u = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+            if not k32.GetProcessTimes(handle, ctypes.byref(c), ctypes.byref(exited),
+                                       ctypes.byref(_k), ctypes.byref(_u)):
+                return True  # 活着但查不到时间: 保守按活
+            if exited.low or exited.high:
+                return False  # 句柄还在但进程已退出
+            if created <= 0:
+                return True  # 记录里无创建时刻: 只能信 pid 存活
+            unix = ((c.high << 32) | c.low) / 1e7 - 11644473600.0
+            return abs(unix - created) <= LOCK_START_TOLERANCE_S
+        finally:
+            k32.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def _lock_is_stale(lock: Path) -> bool:
+    """锁能否回收: 记录的进程已死 → True (立即); 判不了 → mtime 超龄兜底。"""
+    rec = _read_lock_record(lock)
+    if rec is not None:
+        alive = _process_alive(*rec)
+        if alive is not None:
+            return not alive
+    try:
+        return time.time() - lock.stat().st_mtime > STALE_LOCK_SECONDS
+    except OSError:
+        return False
+
+
+def _reclaim_stale_lock(lock: Path) -> None:
+    rec = _read_lock_record(lock)
+    why = f"holder pid {rec[0]} not running" if rec else f"lock untouched for >{STALE_LOCK_SECONDS:.0f}s"
+    try:
+        lock.unlink(missing_ok=True)
+        print(f"[bootstrap] stale build lock reclaimed ({why}) — taking over",
+              file=sys.stderr, flush=True)
+    except OSError:
+        pass
+
+
 def install_or_create(vdir: Path) -> None:
-    """创建 venv（缺失时）并增量安装依赖。`bootstrap.py --ensure` 与冷启动共用此入口。"""
+    """创建 venv（缺失时）并增量安装依赖。`bootstrap.py --ensure` 与冷启动共用此入口。
+
+    抢不到锁 → 等持锁方: stamp 就绪即返回; 持锁方没建成 (崩溃 / 安装失败 /
+    锁过期被回收) → 回到循环头重新抢锁接管安装 (上限 MAX_TAKEOVERS 次)。
+    不允许"锁被回收了但谁都没装"就空手返回 —— 那是假成功。
+    """
     vdir.mkdir(parents=True, exist_ok=True)
     lock = vdir / BUILD_LOCK
-    locked = False
-    try:
+    takeovers = 0
+    while True:
+        locked = False
         try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.close(fd)
-            locked = True
-        except FileExistsError:
-            _wait_for_build(vdir)
-            return
-        except OSError:
-            pass  # 无法加锁 (权限等): 单进程继续, 最坏是重复 install (pip 幂等)
-
-        py = venv_python(vdir)
-        if not py.is_file():
-            r = _run([sys.executable, "-m", "venv", "--clear", str(vdir)])
-            if r.returncode != 0 or not py.is_file():
-                raise RuntimeError(f"创建 venv 失败 (exit {r.returncode}); 常见原因: 缺少 venv/ensurepip 组件")
-            r = _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "-i", _pip_index()])
-            if r.returncode != 0:
-                raise RuntimeError("升级 pip 失败; 换镜像 (VE_PIP_INDEX) 或查网络后重试")
-
-        if not REQUIREMENTS.is_file():
-            raise RuntimeError(f"requirements.txt 不存在: {REQUIREMENTS}")
-        r = _run([str(py), "-m", "pip", "install", "-i", _pip_index(), "-r", str(REQUIREMENTS)])
-        if r.returncode != 0:
-            raise RuntimeError(
-                f"安装 requirements.txt 失败 (exit {r.returncode}); "
-                f"换镜像 (VE_PIP_INDEX, 当前 {_pip_index()}) 或查网络后重试"
-            )
-        r = _run([str(py), "-m", "pip", "install", "-i", _pip_index(), "--no-deps", *EXTRA_SPECS])
-        if r.returncode != 0:
-            raise RuntimeError(f"安装 {' '.join(EXTRA_SPECS)} 失败 (exit {r.returncode})")
-
-        _stamp_path(vdir).write_text(requirements_stamp(), encoding="utf-8")
-    finally:
-        if locked:
             try:
-                lock.unlink(missing_ok=True)
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    # 记录创建时刻而非抢锁时刻: 进程可能跑了很久才来抢锁
+                    created = _own_creation_unix()
+                    os.write(fd, f"{os.getpid()} {created if created is not None else 0.0:.3f}\n"
+                                 .encode("ascii"))
+                finally:
+                    os.close(fd)
+                locked = True
+            except FileExistsError:
+                _wait_for_build(vdir)
+                if _stamp_ok(vdir):
+                    return
+                takeovers += 1
+                if takeovers > MAX_TAKEOVERS:
+                    raise RuntimeError(
+                        f"并发构建连续 {MAX_TAKEOVERS} 次未建成 (持锁方反复失败); "
+                        f"排查网络/磁盘后重跑: python \"{PLUGIN_ROOT / 'mcp' / 'bootstrap.py'}\" --ensure")
+                continue
             except OSError:
-                pass
+                pass  # 无法加锁 (权限等): 单进程继续, 最坏是重复 install (pip 幂等)
+
+            py = venv_python(vdir)
+            if not py.is_file():
+                r = _run([sys.executable, "-m", "venv", "--clear", str(vdir)])
+                if r.returncode != 0 or not py.is_file():
+                    raise RuntimeError(f"创建 venv 失败 (exit {r.returncode}); 常见原因: 缺少 venv/ensurepip 组件")
+                r = _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "-i", _pip_index()])
+                if r.returncode != 0:
+                    raise RuntimeError("升级 pip 失败; 查网络后重试 (特殊网络可用 VE_PIP_INDEX 指定源)")
+
+            if not REQUIREMENTS.is_file():
+                raise RuntimeError(f"requirements.txt 不存在: {REQUIREMENTS}")
+            r = _run([str(py), "-m", "pip", "install", "-i", _pip_index(), "-r", str(REQUIREMENTS)])
+            if r.returncode != 0:
+                raise RuntimeError(
+                    f"安装 requirements.txt 失败 (exit {r.returncode}); "
+                    f"查网络后重试 (当前源 {_pip_index()}; 特殊网络可用 VE_PIP_INDEX 更换)"
+                )
+            r = _run([str(py), "-m", "pip", "install", "-i", _pip_index(), "--no-deps", *EXTRA_SPECS])
+            if r.returncode != 0:
+                raise RuntimeError(f"安装 {' '.join(EXTRA_SPECS)} 失败 (exit {r.returncode})")
+
+            _stamp_path(vdir).write_text(requirements_stamp(), encoding="utf-8")
+            return
+        finally:
+            if locked:
+                try:
+                    lock.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def _wait_for_build(vdir: Path) -> None:
     """并发入口 (CLI 与 server 同时冷启动): 等持锁方建完。
 
-    锁文件 mtime 超过 STALE_LOCK_SECONDS 视为持锁进程已崩溃, 强删后由
-    调用方重新走 install_or_create (其 O_CREAT|O_EXCL 抢锁会自然接管)。
+    返回的三种情况 —— ① stamp 已就绪 (持锁方建完, 即使锁还没来得及删);
+    ② 锁文件消失 (持锁方失败退出, stamp 没写); ③ 过期锁被本函数回收
+    (持锁进程已死, 或 mtime 超龄兜底)。②③ 之后由调用方重新抢锁接管安装。
+    超时抛 RuntimeError。
     """
     lock = vdir / BUILD_LOCK
+    rec = _read_lock_record(lock)
+    holder = f", holder pid {rec[0]}" if rec else ""
+    print(f"[bootstrap] waiting for concurrent venv build{holder} (lock: {lock})",
+          file=sys.stderr, flush=True)
     deadline = time.time() + BUILD_WAIT_TIMEOUT_S
     while time.time() < deadline:
-        if not lock.exists() and _stamp_ok(vdir):
+        if _stamp_ok(vdir):
             return
         try:
-            if lock.exists() and time.time() - lock.stat().st_mtime > STALE_LOCK_SECONDS:
-                lock.unlink(missing_ok=True)
+            if not lock.exists():
+                return
+            if _lock_is_stale(lock):
+                _reclaim_stale_lock(lock)
                 return
         except OSError:
             return
@@ -255,6 +411,11 @@ def main() -> int:
     vdir = venv_dir()
     if args.ensure:
         install_or_create(vdir)
+        # 兜底: install_or_create 正常返回即应已写戳; 万一没有, 绝不报成功
+        if not _stamp_ok(vdir):
+            print(f"[bootstrap] --ensure 返回但 venv 仍不完整 (戳校验失败): {vdir}; "
+                  "请查看上方报错后重跑", file=sys.stderr)
+            return 1
         print(f"venv ready: {vdir}")
         return 0
     healthy = venv_python(vdir).is_file() and _stamp_ok(vdir)

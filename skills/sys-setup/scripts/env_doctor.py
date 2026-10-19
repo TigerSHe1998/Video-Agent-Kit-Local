@@ -6,8 +6,7 @@
 
 仅支持 Windows:
 - **要求先于命令**: 每项先说清"需要什么"(名字 + 版本线), 再按当前平台给示例命令。
-  用户机器长什么样这里不知道 (有没有 winget/choco、有没有管理员权限、是不是 conda
-  环境), 所以命令是示例不是规定 —— 只有要求是硬的。
+  用户机器长什么样这里不知道 (有没有 winget/choco、有没有管理员权限), 所以命令是示例不是规定 —— 只有要求是硬的。
 - **探测与修复分离**: 默认只读探测。系统级软件 (ffmpeg / 字体) 永远只打印,
   不自动执行。
 - **单一事实源**: `/env-check` 命令 (commands/env-check.md) 与本脚本的检查项
@@ -46,16 +45,11 @@ PY = sys.executable or "python3"
 
 OS = "windows"
 
-# ── 国内镜像: 默认走, 不是"备选" ──────────────────────────────────────────────
-# 面向的是普通用户, 官方源在国内经常几十 KB/s 甚至直接超时, 而 pip 的超时表现是
-# "装了十分钟然后失败", 最容易被误判成别的毛病。所以默认就用镜像, 出问题再回官方源
-# (VE_PIP_INDEX 可覆盖)。
-PIP_TSINGHUA = "https://pypi.tuna.tsinghua.edu.cn/simple"
-PIP_ALIYUN = "https://mirrors.aliyun.com/pypi/simple/"
-PIP_INDEX = os.environ.get("VE_PIP_INDEX", PIP_TSINGHUA)
-
-# ffmpeg 国内镜像路径: conda-forge 清华镜像 (winget 没有镜像概念)。
-CONDA_FORGE_TSINGHUA = "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"
+# ── 包源: 官方源, 不走第三方镜像 ────────────────────────────────────────────
+# pip 默认官方 PyPI。特殊网络 (企业代理等) 由用户显式经 VE_PIP_INDEX 覆盖,
+# 不替用户预设源。Python 依赖统一走插件 venv 自举 (bootstrap.py)。
+PIP_OFFICIAL = "https://pypi.org/simple"
+PIP_INDEX = os.environ.get("VE_PIP_INDEX", PIP_OFFICIAL)
 
 # 渲染要落 preview/final mp4 + 抽帧 contact sheet, 空间不够是"渲到一半炸"。
 MIN_FREE_GB = 5
@@ -75,7 +69,7 @@ class Check:
     slow: bool = False                    # 修复耗时以分钟计, 需要长 timeout
     needs: str = ""                       # 前置检查项 id; 前置失败则本项 skip
     platforms: tuple[str, ...] = ()       # 限定平台 (空 = 全平台)
-    env: dict[str, str] = field(default_factory=dict)  # 修复时注入的环境变量 (镜像等)
+    env: dict[str, str] = field(default_factory=dict)  # 修复时注入的环境变量 (当前未使用)
     soft: bool = False                    # 缺了只降级不致命 (不计入"未就绪"的硬缺口)
 
 
@@ -150,7 +144,7 @@ def _ffmpeg_list(kind: str) -> str:
 
 
 def probe_ffmpeg_encoders() -> tuple[bool, str]:
-    """要的不是"有 ffmpeg", 而是"这个 ffmpeg 带我们用的编码器"。conda / 静态包的
+    """要的不是"有 ffmpeg", 而是"这个 ffmpeg 带我们用的编码器"。精简/静态包的
     ffmpeg 经常裁掉 libx264 或 libmp3lame, 表现是渲染跑到最后一步才炸。"""
     text = _ffmpeg_list("encoders")
     if not text:
@@ -261,27 +255,22 @@ CHECKS: list[Check] = [
     Check("ffmpeg", "ffmpeg + ffprobe", "剪切 / 渲染 / 抽帧 / 时长探测 —— 缺了整条流水线都起不来",
           probe_bins("ffmpeg", "ffprobe"),
           need="ffmpeg (含 ffprobe), 且在 PATH 上 —— 版本不挑, 4.3 起都行 (xfade 要 4.3+)",
-          fix=["# winget 没有镜像概念, ffmpeg 静态包来自 gyan.dev, 国内可能慢;",
+          fix=["# winget 装的是 gyan.dev 的静态包, 下载慢时耐心等或挂代理;",
                "winget install --id Gyan.FFmpeg -e",
                "# 或 choco install ffmpeg / scoop install ffmpeg",
-               "# 装完新开一个终端, 否则 PATH 不刷新",
-               "# 想走国内镜像 → conda (不动系统包管理器):",
-               f"#   conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg   # 清华镜像"],
+               "# 装完新开一个终端, 否则 PATH 不刷新"],
           cheap=True),
     Check("ffmpeg-encoders", "ffmpeg 带 libx264/aac/libmp3lame", "渲染最后一步的编码; 缺了前面白跑",
           probe_ffmpeg_encoders,
           need="ffmpeg 编译时带 libx264、aac、libmp3lame (`ffmpeg -encoders` 能看到)",
           fix=["# gyan.dev 的 full 构建带全套; 精简版/自编译版才会缺",
                "winget install --id Gyan.FFmpeg -e",
-               f"# 换成 conda-forge 的全功能构建 (走清华镜像):",
-               f"#   conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg",
                "# 机器上有多个 ffmpeg 时先确认 PATH 上是哪个: 上面探测行里有路径"],
           cheap=True, needs="ffmpeg"),
     Check("ffmpeg-filters", "ffmpeg 带 libass/libfreetype", "字幕烧录 + 标题卡/角标 + 段间溶解",
           probe_ffmpeg_filters,
           need="ffmpeg 编译时带 libass (subtitles/ass 滤镜) 和 libfreetype (drawtext)",
           fix=["winget install --id Gyan.FFmpeg -e   # full 构建带 libass",
-               f"# conda 路线 (清华镜像): conda install -c {CONDA_FORGE_TSINGHUA} ffmpeg",
                "# 注意: 部分极简/静态构建就是不带 libass, 换构建比补参数省事"],
           cheap=True, needs="ffmpeg"),
     Check("font-cjk", "中文字体 (真能写中文的)", "字幕烧录 / 标题卡 / contact sheet 标签",

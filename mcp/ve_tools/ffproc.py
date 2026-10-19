@@ -76,7 +76,7 @@ def safe_expr(value, default: str) -> str:
 # ---------------------------------------------------------------------------
 # Fail-fast capability check
 #
-# conda / static / minimal ffmpeg builds frequently drop libx264, libmp3lame
+# static / minimal / stripped-down ffmpeg builds frequently drop libx264, libmp3lame
 # or libass. The encode or filter only fails at the *last* step, after minutes
 # of rendering — "前面全白跑". Probe the build up front so we return a clear
 # [ERROR] before the long job, not a stderr tail at the end.
@@ -121,6 +121,6 @@ def require_ffmpeg(*, encoders: tuple[str, ...] = (), filters: tuple[str, ...] =
         parts.append("filters missing: " + ", ".join(miss_fil))
     return (
         "[ERROR] this ffmpeg build lacks required features (" + "; ".join(parts)
-        + "). It was compiled without them; install a full build (conda-forge ffmpeg, "
-        "or your platform's full package). Run /env-check for a fix command."
+        + "). It was compiled without them; install a full build "
+        "(winget install --id Gyan.FFmpeg -e). Run /env-check for a fix command."
     )

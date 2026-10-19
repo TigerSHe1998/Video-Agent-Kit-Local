@@ -80,7 +80,7 @@ Windows 系统字体目录（自带微软雅黑，通常不需要装字体）。
 
 MCP 工具调用的 `arguments` 顶层必须是 JSON object；如果入口传入数组、字符串等非对象参数，server 会直接返回结构化错误，不把异常泄漏成工具 traceback。
 
-本插件不注册任何会话 hook，收尾与流程纪律全部由 skill 文档约束。环境检查走 `/env-check`（对应 `sys-setup` skill，管系统级依赖，默认用国内镜像）。剪辑任务的标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；收尾前按 `video-edit-agent` 的文件契约自查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不触发契约。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
+本插件不注册任何会话 hook，收尾与流程纪律全部由 skill 文档约束。环境检查走 `/env-check`（对应 `sys-setup` skill，管系统级依赖，装依赖一律官方源，不走第三方镜像）。剪辑任务的标准流程：先 `speech_transcribe` 产出 `out/transcript.json`，再带 `transcript_path` 调 `video_ingest`；收尾前按 `video-edit-agent` 的文件契约自查 `out/media.json`（或任一 `*media.json` sidecar）、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和非空 `out/report.md` 是否闭环。单步任务（如只做 `inspect_media` 或 `speech_transcribe`）不触发契约。QC 报告必须由 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")` 生成，否则缺少 timeline hash 会被视为未闭环。
 
 推荐工作流：
 

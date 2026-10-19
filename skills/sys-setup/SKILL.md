@@ -5,11 +5,12 @@ when_to_use: >
   Use BEFORE the first edit run on a new machine, or whenever a tool fails in an environment-shaped way:
   `ffmpeg not found`, `Unknown encoder 'libx264'`, `No such filter: 'subtitles'`, `no font file found for family`,
   字幕烧成豆腐块/方块, speech_transcribe 报转录 CLI 未找到, transcribe not found. Also use when asked to
-  检查环境 / 装依赖 / 配国内源 / setup / doctor. System-level only: ffmpeg/ffprobe with libx264, aac,
+  检查环境 / 装依赖 / setup / doctor. System-level only: ffmpeg/ffprobe with libx264, aac,
   libmp3lame and libass/libfreetype filters, a CJK font whose cmap truly covers Chinese, the local transcribe
   CLI (Moss Transcribe WebUI) on PATH, free disk space. Python deps are NOT checked here (owned by the
   plugin venv bootstrap; a ModuleNotFoundError fix is mcp/bootstrap.py --ensure, never a global pip install).
-  Windows-only plugin; install guidance uses China mirrors by default.
+  Windows-only plugin; installs default to official sources (PyPI / gyan.dev), never
+  third-party mirrors.
 ---
 
 # System Setup (sys-setup)
@@ -49,18 +50,17 @@ There is no key, no cloud, nothing to configure beyond the CLI being reachable:
 - `VE_TRANSCRIBE_HOST` / `VE_TRANSCRIBE_PORT` / `VE_TRANSCRIBE_AUTOSPLIT` /
   `VE_TRANSCRIBE_BACKEND` are optional tuning knobs; see `.env.example`.
 
-## Mirrors — use them by default, not as a fallback
+## Package sources — official, not mirrors
 
-The official CDN routes from mainland China are routinely slow enough to time
-out. A timeout there doesn't look like a network problem — it looks like "the install ran for
-ten minutes and then failed", which gets misdiagnosed as a broken package every
-time. **So a mirror is the first choice, not the recovery step.** The doctor
-already puts the mirror into the command it prints (and uses); when you install
-by hand, use these:
+Everything the plugin installs (the venv bootstrap's pip calls) and every
+command the doctor prints goes to **official sources**: PyPI for pip, gyan.dev
+for the winget ffmpeg build. Do not route installs through third-party mirrors.
+If the user's network needs a proxy or a special index, that is an explicit
+opt-in via `VE_PIP_INDEX` (or a system proxy) — never a default we set for them.
 
 | What | First choice | Alternative |
 |---|---|---|
-| ffmpeg | `winget install --id Gyan.FFmpeg -e` (static build from gyan.dev; no mirror concept — be patient or proxy) | `conda install -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge ffmpeg` — Tsinghua mirror, no system package manager touched |
+| ffmpeg | `winget install --id Gyan.FFmpeg -e` (static full build from gyan.dev; the download can be slow — be patient or use a proxy) | `choco install ffmpeg` / `scoop install ffmpeg` — same full build via a different package manager |
 | CJK font | Nothing to install — Windows ships 微软雅黑 (msyh.ttc) | Download NotoSansSC from `github.com/notofonts/noto-cjk` into any directory and point `VE_FONT_DIRS` at it |
 | local transcribe CLI | Not a download — it ships with the user's Moss Transcribe WebUI deployment; the fix is PATH or `VE_TRANSCRIBE_CMD` | — |
 
@@ -89,7 +89,7 @@ Notes that matter in practice:
 2. Read its output **in order**: each line says what's missing, which
    capability dies without it, and an example install command. `[~]`/`[未探测]` lines are skipped checks — fix their
    dependency (`needs=`) first and re-run; don't install blind.
-3. Install what's missing **from the table above**, preferring mirrors.
+3. Install what's missing **from the table above** (official sources).
    The doctor prints example commands; the user runs them (or asks you to,
    for user-level installs only).
 4. Re-run the doctor to confirm; the report lands in
