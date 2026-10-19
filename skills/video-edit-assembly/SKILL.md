@@ -44,7 +44,7 @@ Write or later update `out/media.json` with the inventory. For multiple sources,
 
 For every video/audio source that may participate, call `inspect_media`.
 
-For sources with audio when speech may affect editing, call `transcribe` into `out/transcripts/<source>.json`. Run ASR for all audio-bearing sources when the user says not to cut speech, asks for dialogue-aware editing, or the content type likely includes speech. Silent or no-speech transcripts are valid and should be recorded.
+For sources with audio when speech may affect editing, call `speech_transcribe` into `out/transcripts/<source>.json`. Run ASR for all audio-bearing sources when the user says not to cut speech, asks for dialogue-aware editing, or the content type likely includes speech. Silent or no-speech transcripts are valid and should be recorded.
 
 For each source video that may be used or needs a keep/drop decision, call `video_ingest` with a distinct output path:
 

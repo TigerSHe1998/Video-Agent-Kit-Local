@@ -4,7 +4,7 @@
 
 ## 设计边界
 
-- 不假设主模型可以直接接收视频文件；视频会先按固定规则抽帧并拼成带时间戳的 contact sheet，再通过 MCP 图片结果返回给 Claude Code 主 Agent。
+- 不假设主模型可以直接接收视频文件；视频会先按固定规则抽帧并拼成带时间戳的 contact sheet，再通过 MCP 图片结果返回给宿主主 Agent。
 - 不依赖任何插件目录之外的脚本：抽帧索引逻辑完整内置在 `mcp/ve_tools/video_observe.py`，本工具包不会构造 `image_url` 请求，也不会在工具内部调用任何外部推理服务。
 - 当前只处理用户提供的视频/音频素材，不处理素材库检索，也不做图像/视频生成。
 - 自动化造数据场景下不等待用户澄清或确认。
@@ -13,12 +13,12 @@
 
 - `inspect_media`：ffprobe 媒体探查；总体时长优先读 format duration，缺失时回退到 stream duration；`NaN` / `Infinity` 不会被当成有效时长。
 - `speech_transcribe`：本地语音转录工具，通过 Moss Transcribe WebUI 的 `transcribe` CLI 执行（CLI 自动对接运行中的服务，无服务时自动拉起）。本地模型提供段级时间戳和说话人分离（词级时间戳是 Moss 模型不支持的，`words` 恒为空，下游按既有降级路径处理）；模型自行判定语言（`language` 入参仅记录）。`diarize=false` 时不产出任何说话人标签——引擎在 diarize off 下仍会返回单一 speaker_id，插件会把它剥掉并落 `diarization_disabled: true`，避免"关了聚类却带恒定标签"误导下游。长音频默认按 30 分钟服务端自动分段（`VE_TRANSCRIBE_AUTOSPLIT`，0 关闭），时间戳修正为全片绝对时间；分段时说话人标签带 `p{段}_` 前缀，跨段同一人物可能有不同标签。服务瞬时错误默认额外重试 1 次；用法/输入错误不重试。毫秒时间戳会归一成秒；静音音频返回带 `silent_audio` 标注的有效空转录；**近静音输入却转出非空文本时会被标注 `suspected_hallucination: true` 并附实测响度**（数字静音会触发上游模型幻觉，交叉验证不删内容、只留痕，判断权在下游）。`transcribe` 保留为兼容 alias。
-- `video_ingest`：完整视频抽帧并返回 contact sheet，必须先跑；Claude Code 主 Agent 自己看图并形成理解。显式传入的 `transcript_path` 必须存在；不传 transcript 才表示允许无转录观察；在同一个 MCP 会话里，如果重新观察此前已绑定过 transcript 的同一视频指纹，会复用该视频对应的 transcript。同一路径的视频文件如果被覆盖或替换，必须重新调用 `video_ingest`。只有成功产出 observation package 后，工具才会把该视频记为已 full-ingest；抽帧失败不会推进会话状态。
+- `video_ingest`：完整视频抽帧并返回 contact sheet，必须先跑；宿主主 Agent 自己看图并形成理解。显式传入的 `transcript_path` 必须存在；不传 transcript 才表示允许无转录观察；在同一个 MCP 会话里，如果重新观察此前已绑定过 transcript 的同一视频指纹，会复用该视频对应的 transcript。同一路径的视频文件如果被覆盖或替换，必须重新调用 `video_ingest`。只有成功产出 observation package 后，工具才会把该视频记为已 full-ingest；抽帧失败不会推进会话状态。
 - `video_watch_segment`：局部高 fps 复看；单窗口用 `start_time/end_time/fps`，多窗口用 `segments=[{start,end}, ...]` + `fps`，返回片段 contact sheet 和匹配转录。显式传 `video_path` 可直接复看任意存在的视频，不要求先跑完整 `video_ingest`。不带 `video_path` 时默认使用会话里的 active video；如果 active 文件被覆盖或替换，隐式复看会报错并要求显式传当前 `video_path` 或重新 `video_ingest`。显式传入的 `transcript_path` 必须存在；在同一个 MCP 会话里，如果显式传入此前已绑定过 transcript 的同一视频指纹且未传 transcript 参数，会复用该视频对应的 transcript。非数字时间参数会返回结构化错误；明显超过视频时长的窗口会报错，不会静默截断成较短观察。窗口台账按 `(start, end, fps)` 判重：只有时间和 fps 都相同的窗口才会被跳过，换一个 fps 重看同一窗口是新的观察；确有需要时可传 `force=true` 跳过判重。只有成功产出新 contact sheet 后，局部复看才会更新 active-video 会话状态；抽帧失败或 `skipped_duplicate` 不算新的视觉证据，多窗口部分失败时整体结果会带 `[ERROR]` 前缀汇总。默认观察 JSON 落在 `out/watch/` 子目录（`out/watch/<video>_watch.json` 及逐窗口后缀文件），不再散在 `out/` 根目录。
-- `video_basic_operation`：OpenChatCut 风格的确定性基础操作封装，支持 `trim`、`splice`、`speed`、`crop`、`scale`、`rotate`、`flip`、`freeze_frame`。它适合源素材预处理或单步变换；timeline 成片仍应走 `validate_timeline` / `render_preview`。
+- `video_basic_operation`：确定性基础操作封装，支持 `trim`、`splice`、`speed`、`crop`、`scale`、`rotate`、`flip`、`freeze_frame`。它适合源素材预处理或单步变换；timeline 成片仍应走 `validate_timeline` / `render_preview`。
 - `validate_timeline`：校验 timeline 项目 JSON；依赖 ffprobe 检查源素材时长边界，时长优先读 format duration，缺失时回退到 stream duration，且同一源文件的时长探测会缓存。除了旧版线性 `clips[]`，也支持更接近剪辑软件项目文件的 `project` / `sequence` / `output_canvas` / `assets` / `tracks` / `markers` / `transitions` / clip effects 元数据校验。项目契约（非空 `project`/`assets[]`/`tracks[]` + `sequence`/`output_canvas` + 视频轨）只对项目式 `tracks[]` timeline 是硬门槛；legacy 顶层 `clips[]` 走 **legacy 模式**——结构与 clip 级校验照常报错，契约缺失降级为一条 warning，`render_preview` 的线性分支可以消费它（validation 报告带 `mode: "project" | "legacy"`）。`tracks[]` timeline 中非视频轨的 clip（字幕 / overlay / callout 计划）可以用非空 `text` 代替媒体 `source`；视频 / main 轨 clip 和顶层 `clips[]` 仍必须有 `source`。
 - `render_preview`：用 FFmpeg / ffprobe 渲染预览；render report 会记录 timeline hash 和 output hash。顶层 `clips[]` 仍按 legacy/debug 线性拼接渲染；项目式 `tracks[]` 会按 sequence 画布和 `timeline_start` 编译成基础多轨预览：主视频铺到画布并在片尾补少量末帧降低边界闪帧，源视频音频与 `audio/music/voiceover` 轨先烘焙成全片长度、已按时间线定位的 wav bed，再非归一化混音，`subtitle/text` 轨用 `drawtext` 烧录，`overlay/image` 轨按启用窗口叠加。父轨道没有 `type/name/track_type` 时不会被默认当作主视频轨；未知 track 类型会记录到 render plan 的 unsupported tracks 中，而不是声称完整渲染。
-- `qc_preview`：硬性质量检查，包括容器、黑帧、短编辑边界黑帧、静音、冻结帧、音量、音频覆盖时长和空文件；媒体探测失败或显式传入的 `timeline_path` 不存在时直接报错，黑帧 / 静音 / 冻结 / 音量扫描失败会作为 QC error 写入报告。静音和音量扫描只在存在音轨时运行；完全没有音轨的成片会记一条 warning（整片无声），不会静默通过。
+- `qc_preview`：硬性质量检查，包括容器、黑帧、短编辑边界黑帧（专项扫描把边界黑帧归因到视频轨切点 ±0.08s 内）、静音、冻结帧、音量、音频覆盖时长和空文件；媒体探测失败或显式传入的 `timeline_path` 不存在时直接报错，黑帧 / 静音 / 冻结 / 音量扫描失败会作为 QC error 写入报告。静音和音量扫描只在存在音轨时运行；完全没有音轨的成片会记一条 warning（整片无声），不会静默通过。
 - `timeline_diff`：记录或应用 timeline 修复；`patch` 必须是 JSON object，`apply` 必须是 boolean。支持 `set_timeline_fields`、`set_track_fields`、`add_assets`、`update_assets`、`remove_asset_indices`、`add_tracks`、`insert_tracks`、`replace_tracks`、`remove_track_indices`、`update_clips`、`replace_clips`、`remove_clip_indices`、`move_clips`、`insert_clips` 和 `add_clips`。`update_clips` 是浅层字段合并，字段值为 `null` 表示删除该字段；`set_timeline_fields` 可改项目元数据但不能直接改 `clips/tracks`。`replace/update/remove/move` 索引按补丁前扁平 clip 顺序解释，asset/track 操作用各自数组内的索引解释；结构性 track 操作（add/insert/replace/remove tracks）不能和 clip 操作混在同一个 patch，必须拆成两次 `timeline_diff`。`move_clips` 每次 patch 最多一条，不能与删除操作混用，也不能指向同一个 patch 新插入的 clip。工具会先校验 patch 操作本身和 patch 后的 timeline。`apply=true` 遇到越界 index、非对象 clip/fields、空 patch、多条 move、结构性 track 操作和 clip 操作混用等非法操作时只写 diff 报告，不修改原 timeline。
 
 默认文件契约为 `out/media.json`、`out/transcript.json`、源素材 `video_ingest` 观察包、`out/timeline.json`、`out/timeline_validation.json`、`out/preview.mp4`、`out/preview_qc_report.json` 和 `out/report.md`。其中 `out/transcript.json` 是本地 ASR 可用时的预期产物；如果本地 ASR 不可用，应在 `out/report.md` 记录限制并继续完成其余闭环。单素材任务可使用 `out/video_ingest.json`；多素材任务可以显式传 `output_json` 写到 `out/ingest/*.json` 或 `out/video_ingest_<source>.json`，并在 `out/media.json` 汇总。
@@ -31,7 +31,7 @@
 
 ## 插件使用
 
-把本目录作为 Claude plugin 使用时，`.mcp.json` 会启动 `mcp/video_edit_server.py`（清单 `command` 为 `python3`，要求宿主 PATH 上有 3.10+ 的 Python）。注意：**安装后首次调用 MCP 工具时**会自动构建插件内 `.venv`（下载依赖约 1~2 分钟，取决于网速），宿主对该次调用的等待可能明显长于平时；之后就是秒级热启动。命令入口在：
+把本目录作为插件使用时，`.mcp.json` 会启动 `mcp/video_edit_server.py`（清单 `command` 为 `python3`，要求宿主 PATH 上有 3.10+ 的 Python）。注意：**安装后首次调用 MCP 工具时**会自动构建插件内 `.venv`（下载依赖约 1~2 分钟，取决于网速），宿主对该次调用的等待可能明显长于平时；之后就是秒级热启动。命令入口在：
 
 ```text
 commands/video-edit.md
@@ -145,7 +145,7 @@ CLI 的 `--args-json` / `--args-file` 必须是合法 JSON，且顶层必须是 
 
 ## 基础视频操作
 
-`video_basic_operation` 是 OpenChatCut 风格的单步基础操作工具，所有操作都通过 FFmpeg 落成可检查的视频文件，并写同名 `.basic_operation.json` 报告。当前支持：
+`video_basic_operation` 是单步确定性基础操作工具，所有操作都通过 FFmpeg 落成可检查的视频文件，并写同名 `.basic_operation.json` 报告。当前支持：
 
 - `trim`：`input_path` + `start_time` + `end_time` / `duration`，剪出一个时间范围。
 - `splice`：`clips=[{"source","start","end"}]`，把多个片段归一到同一画布后拼接。
@@ -170,7 +170,7 @@ CLI 的 `--args-json` / `--args-file` 必须是合法 JSON，且顶层必须是 
 - `sheet_width=1568`
 - `jpeg_quality=85`
 
-输出形态是带时间戳的 contact sheet 图片。MCP 会内联前 16 张图片；如果更多，工具结果会列出剩余图片路径，Claude Code 主 Agent 必须继续读取这些图片。sheet 上的时间戳始终按实际帧索引换算成源视频时间（能读到解码器 PTS 时优先用 PTS，兼容可变帧率素材）；局部复看也不改成片段内相对时间。`video_ingest` 会复用相同视频、时间范围、prompt、转录和抽帧设置的既有 sheet，但不会按空白、近重复内容或重复 frame index 折叠采样帧；视频剪辑任务需要尽量完整地看到固定采样覆盖到的画面。`video_watch_segment` 会按源视频路径、大小和修改时间生成独立窗口台账，按 `(start, end, fps)` 跳过同一源视频的精确重复复看窗口（换 fps 重看不算重复，`force=true` 可强制重看）；被跳过的重复窗口不会产生新的 contact sheet，工具会返回 `skipped_duplicate` 状态，且不会把这次调用当成新的视觉观察来更新 active video。重叠但不精确相同的窗口会提示已覆盖范围；这个台账只管理时间窗，不折叠帧内容。active video 也使用同一类指纹保护，避免源文件被覆盖后继续沿用旧 transcript 或旧全片观察结论。
+输出形态是带时间戳的 contact sheet 图片。MCP 会内联前 16 张图片；如果更多，工具结果会列出剩余图片路径，宿主主 Agent 必须继续读取这些图片。sheet 上的时间戳始终按实际帧索引换算成源视频时间（能读到解码器 PTS 时优先用 PTS，兼容可变帧率素材）；局部复看也不改成片段内相对时间。`video_ingest` 会复用相同视频、时间范围、prompt、转录和抽帧设置的既有 sheet，但不会按空白、近重复内容或重复 frame index 折叠采样帧；视频剪辑任务需要尽量完整地看到固定采样覆盖到的画面。`video_watch_segment` 会按源视频路径、大小和修改时间生成独立窗口台账，按 `(start, end, fps)` 跳过同一源视频的精确重复复看窗口（换 fps 重看不算重复，`force=true` 可强制重看）；被跳过的重复窗口不会产生新的 contact sheet，工具会返回 `skipped_duplicate` 状态，且不会把这次调用当成新的视觉观察来更新 active video。重叠但不精确相同的窗口会提示已覆盖范围；这个台账只管理时间窗，不折叠帧内容。active video 也使用同一类指纹保护，避免源文件被覆盖后继续沿用旧 transcript 或旧全片观察结论。
 
 抽帧读取视频元数据时优先使用 OpenCV / python_vali；ffprobe 兜底路径会同时读取 stream duration 和 format duration，避免只有容器时长或只有流时长的视频无法采样。
 

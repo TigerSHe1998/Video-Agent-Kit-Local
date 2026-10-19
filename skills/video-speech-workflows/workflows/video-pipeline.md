@@ -19,7 +19,7 @@ The selected canonical skill's hard rules and file contract remain authoritative
 
 ## Plan from the prompt
 
-The first task artifact must be `out/pipeline_plan.md`. Write a provisional plan from the prompt **before calling `transcribe`, `subtitle_scout`, `video_ingest`, or any render tool**. Do not wait for ASR or visual evidence to create it; mark evidence-dependent choices as `auto -> pending`, then update the same plan after intake. `inspect_media` may run first only when the file cannot otherwise be identified.
+The first task artifact must be `out/pipeline_plan.md`. Write a provisional plan from the prompt **before calling `speech_transcribe`, `subtitle_scout`, `video_ingest`, or any render tool**. Do not wait for ASR or visual evidence to create it; mark evidence-dependent choices as `auto -> pending`, then update the same plan after intake. `inspect_media` may run first only when the file cannot otherwise be identified.
 
 Include:
 

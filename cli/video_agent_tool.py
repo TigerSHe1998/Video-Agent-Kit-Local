@@ -82,7 +82,7 @@ def main() -> None:
 
         resolved = str(Path(known.project_dir).resolve())
         # run_context.project_dir() 的优先级是 CLAUDE_PROJECT_DIR > VE_PROJECT_DIR;
-        # 在 Claude Code 会话里前者总是被导出, 只写后者会让 --project-dir 被静默忽略
+        # 在宿主会话里前者总是被导出, 只写后者会让 --project-dir 被静默忽略
         os.environ["CLAUDE_PROJECT_DIR"] = resolved
         os.environ["VE_PROJECT_DIR"] = resolved
 

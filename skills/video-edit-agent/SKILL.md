@@ -140,8 +140,8 @@ For visual self-review of `out/preview.mp4`, call `video_ingest` with a separate
 ## Tool Policy
 
 - `inspect_media`: required for every source video/audio file that may participate.
-- `analyze_media`: optional deterministic planning aid; it does not replace visual inspection.
-- `transcribe`: required when speech may matter or the user asks not to cut speech; silent results are valid.
+- `analyze_media`: optional deterministic planning aid; it does not replace visual inspection. It runs three full-file decodes (scene/black/silence) — on long sources call it only when those hints are worth the minutes.
+- `speech_transcribe`: required when speech may matter or the user asks not to cut speech; silent results are valid.
 - `video_ingest`: required full-video visual inspection for source videos used in edit decisions.
 - `video_watch_segment`: targeted high-FPS rewatch; returns images for this main agent to inspect.
 - `video_basic_operation`: optional deterministic source-prep tool. Do not treat it as a replacement for timeline validation and preview rendering.

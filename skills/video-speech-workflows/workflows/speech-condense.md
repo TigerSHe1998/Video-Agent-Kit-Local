@@ -108,7 +108,7 @@ You do not have to re-attribute every second — cover the stretches you will ke
 
 ### Phase 2: See The Frame — cheaply, once
 
-**`condense_index` (Phase 3) does the whole visual pass for you.** It samples a *constant* handful of thumbnails — the same eight for a three-minute clip and a forty-minute podcast — and returns them as one sheet, together with the shot-cut count and a measured frame-to-frame **motion baseline**. So Phase 2 is not a separate call; it is a thing you read in Phase 3's output.
+**`condense_index` (Phase 3) does the whole visual pass for you.** It samples a *constant-budget* handful of thumbnails — 3 base frames plus one per detected shot change, capped at 32, regardless of duration — and returns them as one sheet, together with the shot-cut count and a measured frame-to-frame **motion baseline**. So Phase 2 is not a separate call; it is a thing you read in Phase 3's output.
 
 This is a deliberate budget decision, not a shortcut. A 2 fps `video_ingest` of a long recording costs orders of magnitude more and answers a question condensing does not ask: **what to keep is decided from the text.** The picture only has to settle two things.
 

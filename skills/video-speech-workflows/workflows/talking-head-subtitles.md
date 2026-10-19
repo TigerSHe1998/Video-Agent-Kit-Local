@@ -12,7 +12,7 @@ Subtitle a single-speaker video so the captions are **accurate, readable, and ou
 The pipeline is short, so it is tempting to treat it as mechanical: transcribe, split, burn. Three things go wrong when you do.
 
 - **ASR is confidently wrong about the words that matter most.** Names, products, jargon and acronyms are exactly what a 口播 video is about, and exactly what ASR mangles. A subtitle repeats the error in 60-point type.
-- **Timing is inherited, not given.** `transcribe` returns segment-level timestamps — one segment can be a ten-second run of speech. Cue times inside a segment are derived, and derived timing drifts.
+- **Timing is inherited, not given.** `speech_transcribe` returns segment-level timestamps — one segment can be a ten-second run of speech. Cue times inside a segment are derived, and derived timing drifts.
 - **The frame already has content.** The default caption position is a guess. Under it may be the speaker's chin, a lower-third, a logo, or the platform's own UI. You cannot know without looking.
 
 Every rule below exists to force one of those three into the open.
@@ -62,7 +62,7 @@ Then sanity-check the transcript before trusting it:
 
 ### Phase 2: See The Frame
 
-`subtitle_scout(video_path, preset=...)` is the task-shaped way to see the frame, and for most clips it is all you need: it samples one frame per shot, returns a downscaled overview strip (for composition and faces) plus a native-width strip of just the caption band (for what the text will sit on), and — because contrast is the one legibility failure a thumbnail hides — it *measures* the band luminance numerically and hands back a concrete contrast recommendation. Read both strips; do not decide placement from the numbers alone. The scout satisfies the visual-inspection contract on its own.
+`subtitle_scout(video_path, preset=...)` is the task-shaped way to see the frame, and for most clips it is all you need: it samples one frame per shot (capped at 12 frames; beyond that a uniform spread stands in for the remaining shots), returns a downscaled overview strip (for composition and faces) plus a native-width strip of just the caption band (for what the text will sit on), and — because contrast is the one legibility failure a thumbnail hides — it *measures* the band luminance numerically and hands back a concrete contrast recommendation. Read both strips; do not decide placement from the numbers alone. The scout satisfies the visual-inspection contract on its own.
 
 Add a full `video_ingest(video_path, transcript_path="out/transcript.json")` **only when you actually need a dense, evenly-spaced pass** — e.g. the speaker moves across many framings, or you must inspect content between shot cuts. It samples the whole video at 2 fps, which on a long clip is a large number of frames (expensive, and it has timed runs out), so do not run it reflexively on top of the scout for a short or static piece. When you do run it, read every sheet.
 
@@ -203,7 +203,7 @@ Write `out/report.md`: the task, the style chosen and why, transcript correction
 ## Tool Policy
 
 - `inspect_media` — required for the source.
-- `transcribe` — required. Segment-level timestamps only; do not expect word timing.
+- `speech_transcribe` — required. Segment-level timestamps only; do not expect word timing.
 - `subtitle_scout` — the task-shaped way to settle placement and contrast before styling: caption-band strip, shot count, measured band luminance, and a drop-in contrast override. Its band strip and recommendation are a required read.
 - `video_ingest` — the dense full-video pass for a moving speaker or many framings.
 - `video_watch_segment` — the only way to settle a T checkpoint. Batch windows into one call.

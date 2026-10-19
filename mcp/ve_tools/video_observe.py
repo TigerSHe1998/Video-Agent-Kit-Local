@@ -54,7 +54,7 @@ class SampledFrame:
 
 
 def video_ingest(args: dict, ctx: RunContext) -> ToolResult:
-    """Sample the full video and return timestamped image sheets to Claude Code."""
+    """Sample the full video and return timestamped image sheets to the host agent."""
     if not args.get("video_path"):
         return ToolResult(text="[ERROR] video_path is required")
     video_path = ctx.resolve(args["video_path"])
@@ -528,7 +528,7 @@ def build_video_observation(
             "cache_signature": signature,
             "notes": [
                 "No model API was called by this tool.",
-                "The Claude Code main model must inspect the returned timestamped images directly.",
+                "The main model must inspect the returned timestamped images directly.",
                 "Every visual observation must be evaluated together with the matching transcript text.",
             ],
             "elapsed_seconds": round(time.perf_counter() - started, 4),
@@ -545,7 +545,7 @@ def build_video_observation(
     )
     text = (
         f"{label} completed: sampled {sampled_frame_count} frame(s) and built {len(sheets)} timestamped "
-        f"contact sheet(s). The sheets are inlined below for the Claude Code main model to inspect; "
+        f"contact sheet(s). The sheets are inlined below for the main model to inspect; "
         "this tool did not call any model API.\n\n"
         f"Observation JSON: {ctx.virtualize(output_json)}\n"
         f"Sheets:\n{sheet_lines}\n\n"

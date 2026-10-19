@@ -76,7 +76,7 @@ def video_basic_operation(args: dict, ctx: RunContext) -> ToolResult:
         "output_path": str(output_path),
         "output_sha256": file_sha256(output_path) if output_path.is_file() else None,
         "elapsed_seconds": round(time.time() - started, 3),
-        "implementation": "ffmpeg deterministic media operation inspired by OpenChatCut timeline item transforms",
+        "implementation": "ffmpeg deterministic media operation",
     }
     report_path = output_path.with_suffix(".basic_operation.json")
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
