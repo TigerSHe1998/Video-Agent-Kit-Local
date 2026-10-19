@@ -78,12 +78,18 @@ def result_to_content(result: ToolResult | str) -> list[types.TextContent | type
                 oversized.append(p)
         except OSError:
             oversized.append(p)
-    if max_inline and len(inlinable) > max_inline:
+    if not max_inline:
+        # 0 disables inlining entirely: every image is listed as a path, none
+        # is inlined. (回归修复: 旧实现只改了提示文本, inlinable 未清空,
+        # 图片照样内联 —— 提示与行为自相矛盾。)
+        overflow = list(images)
+        inlinable = []
+    elif len(inlinable) > max_inline:
         overflow = inlinable[max_inline:]
         inlinable = inlinable[:max_inline]
+        overflow.extend(oversized)
     else:
-        overflow = []
-    overflow.extend(oversized)
+        overflow = list(oversized)
     if overflow or not max_inline:
         skipped_note = (
             " (oversized frames are listed rather than inlined to bound context)"

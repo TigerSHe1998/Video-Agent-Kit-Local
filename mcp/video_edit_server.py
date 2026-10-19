@@ -41,6 +41,14 @@ from ve_tools.schemas import TOOL_SCHEMAS
 
 
 def main() -> None:
+    # MCP 工具跑在单 worker ThreadPoolExecutor 线程里。cv2 / numpy / PIL 的
+    # C 扩展若在 worker 线程首次加载, 在多线程 asyncio 进程内会卡死数十秒到
+    # 数分钟 (验收实测: worker 卡在 create_module 的 DLL 加载, 见验收报告
+    # P1-B); 同样导入在主线程仅 ~77ms。启动时于主线程预加载, 消除该竞态。
+    import numpy  # noqa: F401
+    import PIL.Image  # noqa: F401
+    import cv2  # noqa: F401
+
     ctx = RunContext(session_kind="mcp")
     impls = {
         "inspect_media": media.inspect_media,

@@ -4,7 +4,7 @@
     {
       "name": "video-agent-kit-local",
       "source": ".",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "本地化视频剪辑工具包：本地转录、抽帧理解、时间线、渲染与质检。",
       "displayName": "Video Agent Kit Local",
       "displayName_i18n": {

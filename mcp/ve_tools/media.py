@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import shutil
 from .ffproc import run_proc
 import time
@@ -18,6 +19,22 @@ ASR_TIMEOUT_SECONDS = 3600.0
 ASR_DEFAULT_RETRIES = 1
 ASR_MAX_RETRIES = 10
 ASR_RETRY_BACKOFF_SECONDS = 10.0
+# 输入整体响度低于该值视为"近静音"。数字静音 ≈ -91dB, 正常语音 ≈ -20dB,
+# 安静语音也很少低于 -40dB; -55dB 只会被真正的静音/近静音触发。
+SILENT_MEAN_VOLUME_DB = -55.0
+
+
+def probe_mean_volume_db(path: Path) -> float | None:
+    """ffmpeg volumedetect 全量解码取 mean_volume；探测失败返回 None（不阻塞转录）。"""
+    try:
+        proc = run_proc(
+            ["ffmpeg", "-i", str(path), "-vn", "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=900,
+        )
+    except Exception:  # noqa: BLE001 — 探测只是旁路验证, 失败不阻断主流程
+        return None
+    match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", (proc.stderr or "") + (proc.stdout or ""))
+    return float(match.group(1)) if match else None
 
 
 def run_json(cmd: list[str], timeout: int = 60) -> dict:
@@ -549,6 +566,25 @@ def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
     if requested_language:
         transcript_payload["requested_language"] = requested_language
 
+    # 数字静音会让上游模型幻觉出流利文本 (验收实测: 全零 wav 转出一段模型
+    # 自我介绍)。对非空转录做响度交叉验证: 输入近静音而文本非空 → 标注
+    # 疑似幻觉。不删内容 —— 判断权留给下游 —— 但不让静音素材无声地骗过管线。
+    has_text = bool((transcript_payload.get("text") or "").strip()) or bool(transcript_payload.get("segments"))
+    if has_text and not transcript_payload.get("silent_audio"):
+        mean_db = probe_mean_volume_db(input_path)
+        if mean_db is not None and mean_db < SILENT_MEAN_VOLUME_DB:
+            transcript_payload["suspected_hallucination"] = True
+            transcript_payload["input_mean_volume_db"] = mean_db
+            hallucination_note = (
+                f"input audio is near-silent (mean {mean_db:.1f} dB < {SILENT_MEAN_VOLUME_DB:.0f} dB) "
+                "yet ASR returned text — likely model hallucination on silence; "
+                "verify against the audio before trusting it"
+            )
+            existing_note = transcript_payload.get("note")
+            transcript_payload["note"] = (
+                f"{existing_note} {hallucination_note}".strip() if existing_note else hallucination_note
+            )
+
     output_path.write_text(
         json.dumps(transcript_payload, ensure_ascii=False, indent=2), encoding="utf-8",
     )
@@ -589,10 +625,20 @@ def speech_transcribe(args: dict, ctx: RunContext) -> ToolResult:
     }
     if transcript_payload.get("silent_audio"):
         data["silent_audio"] = True
+    if transcript_payload.get("suspected_hallucination"):
+        data["suspected_hallucination"] = True
+        data["input_mean_volume_db"] = transcript_payload.get("input_mean_volume_db")
     if transcript_payload.get("chunks"):
         data["chunks"] = transcript_payload["chunks"]
+    text_out = f"{PROVIDER_NAME} transcript written: {ctx.virtualize(output_path)}"
+    if transcript_payload.get("suspected_hallucination"):
+        text_out += (
+            f"\n[WARNING] input audio is near-silent "
+            f"({transcript_payload['input_mean_volume_db']:.1f} dB mean) but the transcript is "
+            "non-empty — likely ASR hallucination on silence; verify against the audio before use."
+        )
     return ToolResult(
-        text=f"{PROVIDER_NAME} transcript written: {ctx.virtualize(output_path)}",
+        text=text_out,
         data=data,
         artifacts=[str(output_path), str(job_json_path)],
     )

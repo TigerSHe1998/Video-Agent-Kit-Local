@@ -166,10 +166,12 @@ def validate_timeline(args: dict, ctx: RunContext) -> ToolResult:
     clips, issues = validate_timeline_data(data, ctx)
     status = "pass" if not any(i["severity"] == "error" for i in issues) else "fail"
     project_contract = timeline_project_contract(data)
+    timeline_mode = "legacy" if isinstance(data, dict) and isinstance(data.get("clips"), list) and not isinstance(data.get("tracks"), list) else "project"
     report = {
         "status": status,
         "timeline_path": str(timeline_path),
         "timeline_sha256": file_sha256(timeline_path),
+        "mode": timeline_mode,
         "clip_count": len(clips),
         "project_contract": project_contract,
         "issues": issues,
@@ -194,10 +196,24 @@ def validate_timeline_data(data: dict[str, Any], ctx: RunContext) -> tuple[list[
     if isinstance(data.get("clips"), list) and isinstance(data.get("tracks"), list):
         issues.append({"severity": "error", "message": "timeline must use either top-level clips[] or tracks[], not both"})
     check_project_shape(data, issues)
-    check_project_contract(data, issues)
+    # 项目契约 (非空 project/assets/tracks/sequence + 视频轨) 只对项目式 tracks[]
+    # timeline 是硬门槛 —— 这是 pipeline 输出的格式要求。legacy 顶层 clips[] 是
+    # 文档保留的 debug 兼容路径, render_preview 的线性分支要能消费它: 契约缺失
+    # 降级为一条 warning, 结构与 clip 级校验照常执行 (验收 P2-2)。
+    tracks_mode = isinstance(data.get("tracks"), list) and not isinstance(data.get("clips"), list)
+    if tracks_mode:
+        check_project_contract(data, issues)
+    elif isinstance(data.get("clips"), list) and not isinstance(data.get("tracks"), list):
+        issues.append({
+            "severity": "warning",
+            "message": (
+                "legacy top-level clips[] timeline: the project contract "
+                "(project/assets/tracks/sequence) applies to pipeline outputs only; "
+                "render_preview uses the legacy sequential path for this timeline"
+            ),
+        })
     check_container_shape(data, issues)
     check_asset_references_and_track_layout(data, issues)
-    tracks_mode = not isinstance(data.get("clips"), list) and isinstance(data.get("tracks"), list)
     clips = timeline_clips(data)
     if not clips:
         issues.append({"severity": "error", "message": "timeline must contain clips[] or tracks[].clips[]"})

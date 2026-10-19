@@ -14,8 +14,12 @@ requirements.txt 哈希变化时自动增量安装。VE_VENV_DIR 可显式指定
    它不是"用裸环境硬跑"的开关）；
 2. venv 缺失 → 用当前解释器 ``python -m venv`` 创建；存在但 requirements 哈希
    过期 → 只做增量 ``pip install -r``；
-3. ``os.execv`` 进 venv 解释器重跑入口脚本（stdio 句柄继承，MCP 不受影响）；
-4. venv 内 import 失败时最多自愈一次（删戳重装再 re-exec），防循环。
+3. 重入 venv 解释器重跑入口脚本：POSIX 上 ``os.execv`` 原地覆盖进程；Windows
+   的 execv 是"spawn 新进程 + 父进程立即退出"的模拟（退出码不透传、含空格的
+   参数被静默拆散、路径含空格时整个重入崩掉），因此 Windows 改用子进程等待
+   等价重入并透传退出码——父进程全程存活，stdio 由子进程继承，MCP stdio
+   语义不变；
+4. venv 内 import 失败时最多自愈一次（删戳重装再重入），防循环。
 
 本模块只用标准库 —— 它必须能在"什么都没装"的解释器里跑起来。
 """
@@ -171,13 +175,21 @@ def _wait_for_build(vdir: Path) -> None:
 
 
 def _reexec() -> None:
-    """进 venv 解释器重跑入口脚本 (仅常规 ``python server.py args`` 形态)。
+    """重入 venv 解释器重跑入口脚本（仅常规 ``python server.py args`` 形态）。
 
     ``python -c "..."`` / ``python -`` / ``python -m mod`` 形态下 sys.argv[0]
     是 "-c"/"-"/模块名, execv 无法原样重放 —— 这些场景的调用方 (import
-    bootstrap 的内联/工具代码) 自己管理环境, 不做 re-exec, 直接返回让调用
+    bootstrap 的内联/工具代码) 自己管理环境, 不做重入, 直接返回让调用
     方在当前解释器里继续 (依赖若缺, 由 ensure_venv 的 VE_VENV_ACTIVE 分支
     或调用方显式 --ensure 处理)。
+
+    Windows 不用 ``os.execv``: 它是"spawn 新进程 + 父进程立即退出"的模拟,
+    实测 (video-agent-test/report.md P1-A) 三个后果 —— ①调用方永远拿到
+    bootstrap 阶段的退出码 0, 真实工具在孤儿进程里异步跑; ②execv 拼命令行
+    不给含空格的参数加引号, 带空格的路径/参数被静默拆散; ③解释器或插件
+    路径含空格时连可执行文件都找不到。改用子进程等价重入: subprocess 用
+    list 传参 (自动加引号), 父进程等待并透传退出码, stdio 句柄由子进程
+    继承 —— MCP stdio 会话语义与 POSIX execv 一致。
     """
     argv0 = sys.argv[0]
     if not argv0 or argv0.startswith("-") or not Path(argv0).is_file():
@@ -186,7 +198,11 @@ def _reexec() -> None:
     if not py.is_file():
         raise RuntimeError(f"venv 解释器不存在: {py}")
     os.environ[ACTIVE_ENV] = "1"
-    os.execv(str(py), [str(py), str(Path(argv0).resolve()), *sys.argv[1:]])
+    argv = [str(py), str(Path(argv0).resolve()), *sys.argv[1:]]
+    if os.name == "nt":
+        proc = subprocess.run(argv)
+        raise SystemExit(proc.returncode if proc.returncode is not None else 1)
+    os.execv(str(py), argv)
 
 
 def _repairs() -> int:

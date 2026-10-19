@@ -75,8 +75,8 @@ All contract artifacts live under `out/` relative to the project directory. Conv
 | `out/timeline_validation.json` | Current timeline validation report with the timeline hash. | Before rendering and after every timeline change. |
 | `out/preview.mp4` | Rendered preview from the current timeline. | Before QC/self-review. |
 | `out/preview.render_report.json` | Render binding report with timeline hash and output hash. | Produced by `render_preview`. |
-| `out/preview.render_plan.json` | Deterministic render plan derived from the timeline. | Produced by `render_preview`. |
-| `out/preview.edit_decisions.json` | Structured edit-decision sidecar. | Produced by `render_preview`. |
+| `out/preview.render_plan.json` | Deterministic render plan derived from the timeline. | Produced by `render_preview` for project-style `tracks[]` renders (legacy `clips[]` renders write only the render report). |
+| `out/preview.edit_decisions.json` | Structured edit-decision sidecar. | Produced by `render_preview` for project-style `tracks[]` renders. |
 | `out/preview_qc_report.json` | Deterministic technical QC report. | After preview render. |
 | `out/report.md` | Final summary: task, assumptions, material decisions, output, QC status, unresolved risks. | Last step. |
 
@@ -163,7 +163,7 @@ The task is complete only when:
 - `out/timeline.json` exists and validates;
 - `out/timeline_validation.json` exists, passes, and covers the current `out/timeline.json`;
 - `out/preview.mp4` exists and is the rendered artifact that QC covers;
-- `out/preview.render_report.json`, `out/preview.render_plan.json`, and `out/preview.edit_decisions.json` exist and cover the current timeline/preview;
+- `out/preview.render_report.json`, `out/preview.render_plan.json`, and `out/preview.edit_decisions.json` exist and cover the current timeline/preview (the plan and decisions sidecars are project-style `tracks[]` render outputs; legacy `clips[]` debug renders write only the render report);
 - `out/preview_qc_report.json` exists, passes, covers the current `out/preview.mp4`, and records the current `out/timeline.json` hash;
 - hard QC errors are resolved or explicitly blocked;
 - `out/report.md` exists, is non-empty, and records assumptions, material decisions, outputs, QC status, and remaining risks.

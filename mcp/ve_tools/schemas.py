@@ -369,7 +369,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         }
     },
     "validate_timeline": {
-        "description": "Validate EDL/timeline project JSON before rendering. Requires ffprobe for source-duration bounds; source duration is read from format duration with stream duration fallback and cached per source file. Pipeline timelines must be JSON objects with non-empty project, assets[], sequence{} or output_canvas{}, tracks[], and at least one video/main track; legacy top-level clips[] is retained only for debug compatibility and does not satisfy the project contract. It validates project/sequence/output_canvas/assets/markers/transitions metadata when provided (transition entries accept type/kind/name); tracks and clips must be objects. Checks required clip source/start/end-or-duration/reason fields, rejects boolean/NaN/Infinity time values, checks end-duration consistency, source existence, source-duration bounds, optional timeline placement/effects/transition metadata, and writes a report with the current timeline hash. In tracks[] timelines, clips on non-video tracks (subtitle/overlay/callout plans) may provide non-empty text instead of a media source; video/main track clips always require a source.",
+        "description": "Validate EDL/timeline project JSON before rendering. Requires ffprobe for source-duration bounds; source duration is read from format duration with stream duration fallback and cached per source file. Pipeline timelines must be JSON objects with non-empty project, assets[], sequence{} or output_canvas{}, tracks[], and at least one video/main track; legacy top-level clips[] timelines validate in legacy mode — structural and clip-level checks still fail on real defects, the project contract is downgraded to a warning, and render_preview can consume them through the legacy sequential path, but pipeline outputs must still be project-style. It validates project/sequence/output_canvas/assets/markers/transitions metadata when provided (transition entries accept type/kind/name); tracks and clips must be objects. Checks required clip source/start/end-or-duration/reason fields, rejects boolean/NaN/Infinity time values, checks end-duration consistency, source existence, source-duration bounds, optional timeline placement/effects/transition metadata, and writes a report with the current timeline hash. In tracks[] timelines, clips on non-video tracks (subtitle/overlay/callout plans) may provide non-empty text instead of a media source; video/main track clips always require a source.",
         "inputSchema": {
             "type": "object",
             "required": ["timeline_path"],
@@ -469,7 +469,9 @@ SPEECH_TRANSCRIBE_SCHEMA = {
         "Create a timestamped transcript for a video/audio file through the local transcribe CLI "
         "(Moss Transcribe WebUI backend). The CLI attaches to a running WebUI service on "
         "VE_TRANSCRIBE_HOST:VE_TRANSCRIBE_PORT (default 127.0.0.1:8390) or starts one automatically. "
-        "Timestamps are segment-level with speaker diarization from the local model; word-level timing "
+        "Timestamps are segment-level with speaker diarization from the local model (pass "
+        "diarize=false to skip diarization: no speaker labels are emitted, even though the engine "
+        "reports a single cluster id); word-level timing "
         "is NOT provided by the Moss models (words stay empty; downstream falls back to segment "
         "timing). The model detects "
         "language itself (the language argument is recorded only). Long media is auto-split "
@@ -477,7 +479,10 @@ SPEECH_TRANSCRIBE_SCHEMA = {
         "corrected to the full-media timeline; when split, speaker labels are per-split clusters "
         "(p{part}_{speaker}) — the same person may carry different labels across parts. Transient "
         "service failures retry by default; input/usage errors do not. Silent audio returns a valid "
-        "empty transcript flagged silent_audio=true. The tool's data summary carries "
+        "empty transcript flagged silent_audio=true; a near-silent input that still comes back with "
+        "text is flagged suspected_hallucination=true with the measured input loudness (the model "
+        "can hallucinate fluent text on digital silence — verify against the audio). The tool's "
+        "data summary carries "
         "word_level_supported (false with the Moss models) so word_count=0 reads as expected, "
         "never as a transcription failure."
     ),
@@ -501,7 +506,7 @@ SPEECH_TRANSCRIBE_SCHEMA = {
             "diarize": {
                 "type": "boolean",
                 "default": True,
-                "description": "Enable speaker diarization (local model clustering).",
+                "description": "Enable speaker diarization (local model clustering). False emits no speaker labels at all (the engine still reports a single cluster id, which would be misleading).",
             },
             "autosplit_min": {
                 "type": "integer",

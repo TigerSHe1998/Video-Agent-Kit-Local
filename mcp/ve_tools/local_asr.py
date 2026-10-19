@@ -218,6 +218,11 @@ def local_asr_transcribe_payload(
     输入旁已存在同名 ``<stem>.json``（CLI 产物会**覆写**它, 用户数据必丢）时,
     自动回退 staging 模式: 输入硬链进 work_dir 再转录, 产物落在 work_dir,
     用户文件分毫不动。
+
+    ``diarize=False`` 时 CLI 侧关掉说话人聚类, 且引擎仍可能返回单一
+    speaker_id —— 合并阶段会把这类标签整体剥掉 (speaker 置空、
+    ``speaker_labels=false``), 不让"关了 diarize 却带恒定标签 1"的结果
+    误导下游的单说话人判断。
     """
     status = local_asr_status()
     if not status["available"]:
@@ -324,6 +329,7 @@ def local_asr_transcribe_payload(
         job_paths,
         source_media=input_path,
         elapsed_seconds=round(time.time() - started, 3),
+        diarize=diarize,
     )
     if isinstance(payload, ToolResult):
         return payload
@@ -378,12 +384,15 @@ def _merge_job_jsons(
     *,
     source_media: Path,
     elapsed_seconds: float,
+    diarize: bool = True,
 ) -> dict[str, Any] | ToolResult:
     """一份或多份（autosplit 分段）job JSON → transcript.json 契约。
 
     分段时间戳是段内相对值，加 ``params.seg_offset_ms`` 修正为全片绝对时间
     （服务端按每段真实时长累加，零漂移）。说话人归一在段内进行；多段时给
     ``p{段}_{说话人}`` 前缀并附 speaker_note —— 与原云端分块路径同一约定。
+    ``diarize=False`` 时剥离全部说话人标签（引擎在 diarize off 下仍可能返回
+    单一 speaker_id，直接透出会被误读成有效聚类）。
     """
     segments: list[dict[str, Any]] = []
     words: list[dict[str, Any]] = []
@@ -412,7 +421,7 @@ def _merge_job_jsons(
             total_ms = offset_ms + float(audio_ms)
             if audio_ms_total is None or total_ms > audio_ms_total:
                 audio_ms_total = total_ms
-        smap = _speaker_map(result)
+        smap = _speaker_map(result) if diarize else {}
 
         part_segments = result.get("segments") or []
         # 与原云端分块路径同约定: 单段无前缀; 多段所有段都带 p{段}_ 前缀
@@ -489,10 +498,15 @@ def _merge_job_jsons(
         payload["audio_duration_seconds"] = round(audio_ms_total / 1000.0, 3)
     if n_parts > 1:
         payload["chunks"] = n_parts
-        payload["speaker_note"] = (
-            "speaker labels are per-split clusters (p{part}_{speaker}); "
-            "the same person may carry different labels across splits"
-        )
+        if diarize:
+            payload["speaker_note"] = (
+                "speaker labels are per-split clusters (p{part}_{speaker}); "
+                "the same person may carry different labels across splits"
+            )
+    if not diarize:
+        # 引擎在 --diarize off 下仍返回单一 speaker_id; 剥离后在 payload 留痕,
+        # 下游"有标签"的判断 (speaker_labels/segments[].speaker) 不被误导。
+        payload["diarization_disabled"] = True
     if errors:
         payload["part_errors"] = errors
     if not segments and not text:

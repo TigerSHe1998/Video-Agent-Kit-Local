@@ -16,7 +16,7 @@ skills: video-edit-agent
 3. 对需要理解语音内容的视频/音频，紧接着调用 `speech_transcribe(input_path)` 生成对应 transcript（单主视频可用 `out/transcript.json`；多素材用 `out/transcripts/<素材名>.json`）。默认走本地 ASR（Moss Transcribe WebUI，带段级时间戳与说话人聚类；词级时间戳不受支持，相关下游功能自动降级）。静音音频返回的空转录是有效结果，不是失败。只有当本地 ASR 不可用（`transcribe` CLI 不在 PATH）时才允许继续无转录流程，并把该限制记入 `out/report.md`；不要伪造转录。
 4. 必须对每个需要做剪辑判断的源视频调用 `video_ingest(video_path, transcript_path=...)` 看完整视频；它会按内嵌抽帧逻辑把视频变成带时间戳的 contact sheet，并附带匹配转录。你必须自己读取这些图片后再做剪辑判断。图片素材需要用文件读取/视觉检查，不能忽略。
 5. 只有在需要确认剪切点、动作连续性、字幕遮挡、表情或画面细节时，才调用 `video_watch_segment` 局部高 fps 复看；如果已经知道多个疑点，用 `segments=[{"start":..., "end":...}, ...]` 一次批量复看。
-6. 生成 timeline JSON 后先 `validate_timeline`，再 `render_preview`，最后 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")`。项目式 `tracks[]` timeline 会按 sequence 画布、轨道、`timeline_start`、字幕/文字、图片叠加和音频混音编译成 preview，并生成 `out/preview.render_report.json`、`out/preview.render_plan.json`、`out/preview.edit_decisions.json`。
+6. 生成 timeline JSON 后先 `validate_timeline`，再 `render_preview`，最后 `qc_preview(video_path="out/preview.mp4", timeline_path="out/timeline.json")`。项目式 `tracks[]` timeline 会按 sequence 画布、轨道、`timeline_start`、字幕/文字、图片叠加和音频混音编译成 preview，并生成 `out/preview.render_report.json`、`out/preview.render_plan.json`、`out/preview.edit_decisions.json`（后两份是项目式渲染的产物；legacy 顶层 `clips[]` 的 debug 渲染只写 render report）。
 7. 如需视觉自检 preview，用 `video_ingest(video_path="out/preview.mp4", output_json="out/preview_ingest.json", ...)`，不要覆盖源素材的 `out/video_ingest.json`。之后不带 `video_path` 的 `video_watch_segment` 会默认复看 preview；如果 preview 被重新渲染到同一路径，先重新 `video_ingest`，再做隐式局部复看。如果还要回看原始素材，显式传原始素材路径；这个路径必须仍是此前 full-ingest 过的同一文件指纹，同一 MCP 会话内会复用此前绑定的源素材 transcript。
 8. 如 QC 或内容自检发现问题，用 `timeline_diff` 记录修复，再重新验证。
 
